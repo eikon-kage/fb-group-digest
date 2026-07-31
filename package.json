@@ -1,0 +1,33 @@
+{
+  "name": "fb-group-digest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Collect Facebook group posts you can already see, filter by keyword, analyze with Claude, and email a digest.",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "fbdigest": "./src/cli.js"
+  },
+  "scripts": {
+    "login": "node src/cli.js login",
+    "collect": "node src/cli.js collect",
+    "analyze": "node src/cli.js analyze",
+    "report": "node src/cli.js report",
+    "send": "node src/cli.js send",
+    "run": "node src/cli.js run",
+    "test": "node --test \"test/**/*.test.js\"",
+    "lint": "npx --no-install @biomejs/biome check .",
+    "lint:fix": "npx --no-install @biomejs/biome check . --write",
+    "format": "npx --no-install @biomejs/biome format . --write"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
+    "nodemailer": "^7.0.3",
+    "playwright": "^1.50.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.0"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "groups": [
+    {
+      "id": "1234567890",
+      "name": "Mua bán đồ cũ Hà Nội",
+      "url": "https://www.facebook.com/groups/1234567890"
+    },
+    {
+      "id": "0987654321",
+      "name": "Việc làm IT Hà Nội",
+      "url": "https://www.facebook.com/groups/0987654321"
+    }
+  ],
+  "rules": [
+    {
+      "name": "Cần mua laptop",
+      "all": ["cần mua"],
+      "any": ["laptop", "macbook", "thinkpad"],
+      "none": ["đã mua", "đã có"],
+      "weight": 3
+    },
+    {
+      "name": "Tuyển dụng backend",
+      "any": ["tuyển", "recruit", "hiring"],
+      "regex": ["\\b(node|golang|java)\\b"],
+      "weight": 2
+    }
+  ],
+  "minScore": 1
+}

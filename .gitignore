@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.local
+
+# Browser session state — contains your Facebook cookies. Never commit.
+storage-state.json
+
+# Collected posts, analysis output, generated reports, dedup index.
+data/
+out/
+
+.DS_Store
+*.log
