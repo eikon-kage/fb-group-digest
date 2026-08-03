@@ -1,46 +1,74 @@
 /**
  * Playwright browser lifecycle.
  *
- * Deliberately plain: the default Chromium build, the default user agent, no
- * proxy, no fingerprint patching. The tool drives a browser as itself. If
- * Facebook's automation detection objects to that, the answer is to stop
- * running it, not to disguise it.
+ * Every run reuses one fixed Chromium profile directory (FB_USER_DATA_DIR), the
+ * same way a normal browser profile works: cookies, localStorage and refreshed
+ * session tokens are written back to disk when the run ends, so you sign in by
+ * hand once and later runs just open the profile.
+ *
+ * Deliberately plain otherwise: the default Chromium build, the default user
+ * agent, no proxy, no fingerprint patching. The tool drives a browser as
+ * itself. If Facebook's automation detection objects to that, the answer is to
+ * stop running it, not to disguise it.
  */
 
 import { access } from "node:fs/promises";
+import { resolve } from "node:path";
 import { chromium } from "playwright";
 import { env, envBool } from "../config.js";
 
 /** Facebook URL fragments that mean "the account needs human attention". */
 const CHECKPOINT_MARKERS = ["/checkpoint", "/login", "/recover", "two_step_verification"];
 
+/** Where the fixed browser profile lives. */
+export function profileDir() {
+    return resolve(env("FB_USER_DATA_DIR", "./.fb-profile"));
+}
+
 /**
- * Open a browser context restored from the saved login session.
+ * Launch Chromium on the fixed profile.
  *
- * @returns {Promise<{ browser: import("playwright").Browser,
- *                     context: import("playwright").BrowserContext,
- *                     page: import("playwright").Page }>}
+ * Shared by `login` and `collect` so both stages always touch the same profile.
+ *
+ * Note: Playwright does not refuse a second launch on the same directory, so
+ * two runs at once share one profile and the last one to exit wins. Do not run
+ * `login` while a scheduled `collect` is in flight.
+ *
+ * @param {{ headless?: boolean }} [options]
+ * @returns {Promise<import("playwright").BrowserContext>}
  */
-export async function openSession() {
-    const statePath = env("FB_STORAGE_STATE", "./storage-state.json");
-
-    try {
-        await access(statePath);
-    } catch {
-        throw new Error(
-            `Chưa có session đăng nhập (${statePath}).\n` + `Chạy "npm run login" trước.`,
-        );
-    }
-
-    const browser = await chromium.launch({ headless: envBool("HEADLESS", false) });
-    const context = await browser.newContext({
-        storageState: statePath,
+export async function launchProfile({ headless = envBool("HEADLESS", false) } = {}) {
+    return await chromium.launchPersistentContext(profileDir(), {
+        headless,
         locale: "vi-VN",
         viewport: { width: 1280, height: 900 },
     });
-    const page = await context.newPage();
+}
 
-    return { browser, context, page };
+/**
+ * Open the fixed profile and hand back the tab to work in.
+ *
+ * The profile keeps exactly one tab: the persistent context always restores at
+ * least one page, and that page is reused instead of opening a new one.
+ *
+ * @returns {Promise<{ context: import("playwright").BrowserContext,
+ *                     page: import("playwright").Page }>}
+ */
+export async function openSession() {
+    const dir = profileDir();
+
+    try {
+        await access(dir);
+    } catch {
+        throw new Error(
+            `Chưa có profile trình duyệt (${dir}).\n` + `Chạy "npm run login" một lần trước.`,
+        );
+    }
+
+    const context = await launchProfile();
+    const page = context.pages()[0] ?? (await context.newPage());
+
+    return { context, page };
 }
 
 /**
@@ -57,14 +85,17 @@ export function assertNotCheckpointed(page) {
         throw new Error(
             `Facebook chuyển hướng sang ${url}\n` +
                 `Tài khoản đang bị checkpoint hoặc session hết hạn. ` +
-                `Mở Facebook bằng trình duyệt thường, xử lý xong rồi chạy lại "npm run login".`,
+                `Chạy "npm run login" để đăng nhập lại trong chính profile này.`,
         );
     }
 }
 
 /**
- * @param {{ browser: import("playwright").Browser }} session
+ * Close the context — this is what flushes the refreshed cookies to the
+ * profile directory, so it must run even when the collect step failed.
+ *
+ * @param {{ context?: import("playwright").BrowserContext }} session
  */
 export async function closeSession(session) {
-    await session.browser?.close();
+    await session.context?.close();
 }

@@ -2,7 +2,8 @@ node_modules/
 .env
 .env.local
 
-# Browser session state — contains your Facebook cookies. Never commit.
+# Fixed Chromium profile — contains your Facebook cookies. Never commit.
+.fb-profile/
 storage-state.json
 
 # Collected posts, analysis output, generated reports, dedup index.

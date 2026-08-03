@@ -186,14 +186,21 @@ Viết một bản tóm tắt tiếng Việt bằng Markdown, gồm:
 
 Bám sát dữ liệu ở trên, không bịa thêm. Nếu dữ liệu quá ít để nói về xu hướng, nói thẳng như vậy.`;
 
-    const stream = anthropic.messages.stream({
-        model,
-        max_tokens: 8000,
-        output_config: { effort },
-        messages: [{ role: "user", content: prompt }],
-    });
-
-    const message = await stream.finalMessage();
+    let message;
+    try {
+        const stream = anthropic.messages.stream({
+            model,
+            max_tokens: 8000,
+            output_config: { effort },
+            messages: [{ role: "user", content: prompt }],
+        });
+        message = await stream.finalMessage();
+    } catch (error) {
+        // Same bargain as the classify pass: a report missing its opening
+        // summary beats no report at all, when the post list is already built.
+        log.warn(`Không tạo được phần tóm tắt: ${error.message}`);
+        return "_Không tạo được phần tóm tắt cho lần chạy này._";
+    }
 
     if (message.stop_reason === "refusal") {
         log.warn("Phần tóm tắt bị từ chối, báo cáo vẫn có đầy đủ danh sách bài.");

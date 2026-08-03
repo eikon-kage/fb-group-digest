@@ -13,11 +13,15 @@ collect  →  analyze  →  report  →  send
 
 ## Phạm vi — đọc kỹ trước khi dùng
 
-Công cụ này **chỉ thu thập nội dung bài đăng** và link tới chính bài đó.
+Công cụ này thu thập nội dung bài đăng, link tới bài, **và thông tin người
+đăng**: tên hiển thị, ảnh đại diện, link trang cá nhân, user id.
 
-Nó **không** thu thập thông tin người đăng: không link profile, không user id,
-không tên tác giả. Đầu ra dùng để tổng hợp thông tin thị trường, không phải để
-tạo danh sách nhắn tin.
+> **Đây là dữ liệu định danh.** `data/posts.json`, `data/posts.csv` và file báo
+> cáo chứa đủ thông tin để dựng danh sách liên hệ. Các thư mục đó nằm trong
+> `.gitignore` — đừng commit, đừng chia sẻ, và cân nhắc rằng bạn đang lưu dữ
+> liệu cá nhân của người khác trên máy mình.
+>
+> Không cần phần này thì đặt `COLLECT_AUTHORS=false`.
 
 Nó **không** có bất kỳ kỹ thuật né phát hiện bot nào: dùng Chromium mặc định,
 user-agent mặc định, không proxy, không giả fingerprint, không random delay để
@@ -62,11 +66,25 @@ npm run login
 ```
 
 Mở cửa sổ trình duyệt, bạn **tự đăng nhập bằng tay** — kể cả bước 2FA. Script
-không đọc mật khẩu từ đâu cả; nó chỉ lưu cookie vào `storage-state.json` để các
-lần chạy sau khỏi đăng nhập lại.
+không đọc mật khẩu từ đâu cả.
 
-> `storage-state.json` chứa cookie Facebook của bạn. Đã nằm trong `.gitignore` —
+Toàn bộ phiên đăng nhập nằm trong **một thư mục profile Chromium cố định**
+(mặc định `.fb-profile/`, đổi qua `FB_USER_DATA_DIR` trong `.env`) — đúng như
+một profile Chrome bình thường. Mỗi lần chạy `collect`, tool mở lại chính
+profile đó, dùng lại đúng một tab, và ghi cookie đã gia hạn ngược lại vào thư
+mục khi đóng. Nên bạn chỉ đăng nhập **một lần**, không phải login lại sau mỗi
+lần chạy.
+
+Chạy lại `npm run login` lúc nào cũng được: nếu profile còn đăng nhập, script
+báo "đã đăng nhập sẵn" rồi thoát; nếu Facebook bắt xác minh lại, bạn xử lý ngay
+trong cửa sổ đó.
+
+> `.fb-profile/` chứa cookie Facebook của bạn. Đã nằm trong `.gitignore` —
 > đừng commit, đừng chia sẻ.
+>
+> Đừng chạy hai tiến trình cùng lúc trên cùng một profile (ví dụ `login` trong
+> khi cron đang `collect`): Playwright không khoá thư mục, tiến trình đóng sau
+> sẽ ghi đè session của tiến trình kia.
 
 ---
 
@@ -189,8 +207,8 @@ src/
   cli.js              điều phối các bước
   config.js           đọc .env + config/groups.json (có validate)
   collect/
-    browser.js        vòng đời Playwright + phát hiện checkpoint
-    login.js          đăng nhập thủ công một lần
+    browser.js        profile Chromium cố định + phát hiện checkpoint
+    login.js          đăng nhập thủ công một lần vào profile đó
     scrape.js         cuộn feed, trích nội dung bài
   filter/
     normalize.js      fold tiếng Việt, so khớp theo ranh giới từ, fingerprint
@@ -213,9 +231,16 @@ test/                 73 test, chạy offline
 - **DOM Facebook hay đổi.** `scrape.js` bám vào `[role="article"]` — thuộc tính
   accessibility nên ổn định hơn class name, nhưng không có gì bảo đảm. Nếu bỗng
   nhiên thu được 0 bài, đây là chỗ cần sửa đầu tiên.
-- **Không có thời gian đăng chính xác.** Facebook hiển thị nhãn tương đối
-  ("2 giờ"). Trường `timeLabel` giữ nguyên nhãn đó; `collectedAt` mới là mốc
-  thời gian đáng tin.
+- **Không lọc được theo ngày đăng.** Facebook xáo trộn timestamp của bài ngay
+  trong DOM: mỗi ký tự một element, thứ tự bị đảo, ghép lại đúng bằng CSS. Đọc
+  được nó đồng nghĩa với gỡ một biện pháp chống scrape, việc mà tool này cố ý
+  không làm. Nên `postedAt` thường là `null`, và **không có tuỳ chọn "chỉ lấy N
+  ngày gần nhất"**. Thay vào đó `collect` ép feed sang thứ tự thời gian
+  (`?sorting_setting=CHRONOLOGICAL`) rồi cuộn từ mới về cũ, giới hạn bằng
+  `MAX_POSTS_PER_GROUP`. `collectedAt` mới là mốc thời gian đáng tin.
+- **Permalink không phải bài nào cũng có.** Link timestamp của bài chỉ chứa
+  query tracking, không có đường dẫn. Permalink lấy được từ link của bình luận
+  (chúng trỏ về bài cha), nên bài chưa có bình luận thì `permalink` là `null`.
 - **Bài dài có thể bị cắt.** Script bấm "Xem thêm" trước khi trích, nhưng nút
   bị re-render thì bỏ qua và lấy phần text đang có.
 - **Chỉ đọc bài, không đọc bình luận.**

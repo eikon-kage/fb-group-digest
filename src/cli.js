@@ -22,13 +22,14 @@ import { loadConfig, loadEnv } from "./config.js";
 import { filterPosts } from "./filter/keywords.js";
 import { log } from "./logger.js";
 import { sendReport } from "./mail/send.js";
-import { toCsv } from "./report/csv.js";
+import { toCsv, toPostsCsv } from "./report/csv.js";
 import { renderReport } from "./report/html.js";
 import { readJson, writeJson, writeText } from "./store/io.js";
-import { commitSeen, loadSeen, partitionBySeen } from "./store/seen.js";
+import { commitSeen, loadSeen, partitionBySeen, seenKeys } from "./store/seen.js";
 
 const PATHS = {
     posts: "data/posts.json",
+    postsCsv: "data/posts.csv",
     analysis: "data/analysis.json",
     seen: "data/seen.json",
 };
@@ -72,16 +73,74 @@ function reportPaths(flags) {
 
 async function cmdCollect(flags) {
     const config = await loadConfig(flags.config ?? "config/groups.json");
+    const startOver = flags.all === "true";
+
+    // Two things count as "already have it": posts a previous report recorded,
+    // and posts still sitting in posts.json from an earlier collect. Without
+    // the second, running collect twice re-walked the whole feed and then
+    // overwrote the file with the result.
+    const previous = startOver ? [] : await loadPreviousPosts();
+    const skip = startOver ? {} : await loadSeen(PATHS.seen);
+    for (const post of previous) {
+        for (const key of seenKeys(post)) skip[key] = post.collectedAt ?? new Date().toISOString();
+    }
+
+    if (previous.length > 0) log.step(`Đã có sẵn ${previous.length} bài, chỉ lấy bài mới.`);
+
     const session = await openSession();
 
     try {
-        const posts = await collectAll(session.page, config.groups);
-        await writeJson(PATHS.posts, posts);
-        log.info(`Đã lưu ${posts.length} bài vào ${PATHS.posts}`);
-        return posts;
+        const fresh = await collectAll(session.page, config.groups, { seen: skip });
+        const all = [...previous, ...fresh];
+
+        // JSON feeds the next stage; the CSV is the same data in a form you can
+        // open in Excel without running analyze/report.
+        const csvPath = flags["posts-csv"] ?? PATHS.postsCsv;
+        await writeJson(PATHS.posts, all);
+        await writeText(csvPath, toPostsCsv(all));
+
+        log.info(`Thêm ${fresh.length} bài mới — tổng ${all.length} bài trong ${PATHS.posts}`);
+        log.info(`CSV:     ${csvPath}`);
+        return all;
     } finally {
         await closeSession(session);
     }
+}
+
+/** Posts left by an earlier collect, or an empty list if the file is unusable. */
+async function loadPreviousPosts() {
+    const data = await readJson(PATHS.posts, []);
+    return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Mark the posts on disk as read so later runs skip them.
+ *
+ * The pipeline normally records posts as seen once a report is written. This
+ * is the manual equivalent, for when you have looked through data/posts.json
+ * and want the next collect to start after it.
+ */
+async function cmdMarkRead(flags) {
+    const source = flags.from === "analysis" ? PATHS.analysis : PATHS.posts;
+    const data = await readJson(source, null);
+
+    if (data === null) {
+        throw new Error(`Chưa có ${source}. Chạy "npm run collect" trước.`);
+    }
+
+    const posts = Array.isArray(data) ? data : (data.posts ?? []);
+    if (posts.length === 0) {
+        log.warn(`${source} không có bài nào — không đánh dấu gì.`);
+        return;
+    }
+
+    const seen = await loadSeen(PATHS.seen);
+    const before = Object.keys(seen).length;
+    const next = await commitSeen(PATHS.seen, seen, posts);
+    const added = Object.keys(next).length - before;
+
+    log.info(`Đã đánh dấu ${posts.length} bài là đã đọc (${added} khoá mới trong ${PATHS.seen}).`);
+    log.info(`Lần "collect" sau sẽ bỏ qua chúng. Dùng "--all" nếu muốn lấy lại.`);
 }
 
 async function cmdAnalyze(flags) {
@@ -167,7 +226,8 @@ fb-group-digest — tóm tắt bài đăng nhóm Facebook
 
 Lệnh:
   login              Đăng nhập Facebook bằng tay và lưu session
-  collect            Đọc các nhóm trong config, lưu bài thô
+  collect            Đọc các nhóm trong config, lưu bài thô (JSON + CSV)
+  mark-read          Đánh dấu các bài đang có là đã đọc, lần sau bỏ qua
   analyze            Lọc từ khoá + khử trùng lặp + phân tích bằng Claude
   report             Sinh báo cáo HTML và CSV
   send               Gửi báo cáo gần nhất qua email
@@ -175,9 +235,13 @@ Lệnh:
 
 Tuỳ chọn:
   --config <path>    File cấu hình nhóm/từ khoá (mặc định config/groups.json)
+  --all              Với "collect": bỏ qua bộ nhớ, lấy lại tất cả và ghi đè
+  --from <nguồn>     Với "mark-read": "posts" (mặc định) hoặc "analysis"
   --date <yyyy-mm-dd>  Ngày dùng để đặt tên file báo cáo (mặc định hôm nay)
   --html <path>      Ghi đè đường dẫn file HTML
-  --csv <path>       Ghi đè đường dẫn file CSV
+  --csv <path>       Ghi đè đường dẫn file CSV báo cáo
+  --posts-csv <path>   Với "collect": ghi đè đường dẫn CSV bài thô
+                       (mặc định data/posts.csv)
   --no-mail          Với "run": tạo báo cáo nhưng không gửi mail
 `);
 }
@@ -185,6 +249,7 @@ Tuỳ chọn:
 const COMMANDS = {
     login: runLogin,
     collect: cmdCollect,
+    "mark-read": cmdMarkRead,
     analyze: cmdAnalyze,
     report: cmdReport,
     send: cmdSend,

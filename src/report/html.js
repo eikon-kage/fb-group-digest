@@ -92,6 +92,11 @@ h1 { font-size: 24px; margin: 0 0 4px; }
 h2 { font-size: 19px; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e5e5e5; }
 h3 { font-size: 16px; margin: 20px 0 8px; }
 .meta { color: #666; font-size: 13px; margin-bottom: 24px; }
+.stamp { color: #666; font-size: 12px; margin: 0 0 8px; }
+.author { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.author img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex: none; }
+.author .who { font-weight: 600; font-size: 14px; }
+.muted { color: #999; font-style: italic; }
 .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
 .stat { flex: 1 1 120px; padding: 12px; border: 1px solid #e5e5e5; border-radius: 8px; }
 .stat b { display: block; font-size: 22px; line-height: 1.2; }
@@ -104,7 +109,6 @@ h3 { font-size: 16px; margin: 20px 0 8px; }
 .tag.score { background: #e6f0ff; color: #14417a; }
 .summary { font-weight: 600; margin: 0 0 6px; }
 .body { white-space: pre-wrap; color: #444; font-size: 14px; margin: 0 0 8px; }
-.body.clamp { max-height: 8.5em; overflow: hidden; }
 a { color: #14417a; }
 .foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e5e5; color: #888; font-size: 12px; }
 ul { padding-left: 20px; }
@@ -113,7 +117,8 @@ ul { padding-left: 20px; }
     h2, .foot { border-color: #303236; }
     .stat, .post { border-color: #303236; }
     .digest { background: #1e2024; }
-    .meta, .stat span, .body { color: #a8a8a8; }
+    .meta, .stat span, .body, .stamp { color: #a8a8a8; }
+    .muted { color: #8a8a8a; }
     .tag { background: #2a2d33; color: #d8d8d8; }
     .tag.hi { background: #4a1f1f; color: #ffbdbd; }
     .tag.score { background: #1c2f4d; color: #b8d4ff; }
@@ -164,8 +169,8 @@ export function renderReport({ posts, digest, stats }) {
 ${sections || "<p>Không có bài nào khớp bộ lọc trong lần chạy này.</p>"}
 
 <p class="foot">
-Sinh tự động bởi fb-group-digest. Báo cáo chỉ chứa nội dung bài đăng và link tới
-chính bài đó — không thu thập thông tin người đăng.
+Sinh tự động bởi fb-group-digest. Báo cáo chứa nội dung bài đăng, link tới bài,
+và thông tin người đăng (tên, ảnh đại diện, link trang cá nhân).
 </p>
 </div>
 </body>
@@ -196,13 +201,74 @@ function renderPost(post) {
         : "";
     const link = post.permalink
         ? `<a href="${escapeHtml(post.permalink)}" rel="noreferrer noopener">Mở bài trên Facebook →</a>`
-        : "";
+        : `<span class="muted">Không lấy được link bài</span>`;
 
     return `<div class="post">
     <div class="post-head">${tags}</div>
+    ${renderAuthor(post)}
+    <p class="stamp">${renderStamp(post)}</p>
     ${summary}
-    <p class="body clamp">${escapeHtml(post.text)}</p>
+    <p class="body">${escapeHtml(post.text)}</p>
     ${entities}
     ${link}
 </div>`;
+}
+
+/**
+ * The poster: avatar, display name, link to their profile.
+ *
+ * @param {object} post
+ * @returns {string}
+ */
+function renderAuthor(post) {
+    if (!post.authorName && !post.authorAvatar) return "";
+
+    const avatar = post.authorAvatar ? `<img src="${escapeHtml(post.authorAvatar)}" alt="">` : "";
+    const name = escapeHtml(post.authorName ?? "(không rõ)");
+    const who = post.authorUrl
+        ? `<a class="who" href="${escapeHtml(post.authorUrl)}" rel="noreferrer noopener">${name}</a>`
+        : `<span class="who">${name}</span>`;
+
+    return `<div class="author">${avatar}${who}</div>`;
+}
+
+/** Vietnamese local time, or an honest note when Facebook withheld the date. */
+function formatWhen(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleString("vi-VN", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+}
+
+/**
+ * The provenance line: which group, when posted, when collected.
+ *
+ * `postedAt` is derived from Facebook's relative label ("17h"), so it is
+ * approximate and says so. Posts whose label could not be read show the
+ * collection time instead of an invented date.
+ *
+ * @param {object} post
+ * @returns {string}
+ */
+function renderStamp(post) {
+    const bits = [`<b>${escapeHtml(post.groupName ?? "?")}</b>`];
+
+    const posted = post.postedAt ? formatWhen(post.postedAt) : null;
+    if (posted !== null) {
+        const label = post.timeLabel ? ` (${escapeHtml(post.timeLabel)})` : "";
+        bits.push(`đăng khoảng ${escapeHtml(posted)}${label}`);
+    } else {
+        bits.push(`<span class="muted">không đọc được ngày đăng</span>`);
+    }
+
+    const collected = post.collectedAt ? formatWhen(post.collectedAt) : null;
+    if (collected !== null) bits.push(`thu lúc ${escapeHtml(collected)}`);
+
+    return bits.join(" · ");
 }

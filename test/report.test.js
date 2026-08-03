@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { escapeField, toCsv } from "../src/report/csv.js";
+import { escapeField, toCsv, toPostsCsv } from "../src/report/csv.js";
 import { escapeHtml, renderMarkdown, renderReport } from "../src/report/html.js";
 
 describe("escapeField", () => {
@@ -52,7 +52,8 @@ describe("toCsv", () => {
         const [header] = toCsv(posts).slice(1).split("\r\n");
         assert.equal(
             header,
-            "group,category,urgency,score,rules,summary,entities,text,permalink,collected_at",
+            "group,category,urgency,score,rules,summary,entities,text,permalink," +
+                "author_name,author_url,author_id,collected_at",
         );
     });
 
@@ -72,6 +73,54 @@ describe("toCsv", () => {
     it("tolerates posts with no analysis", () => {
         const csv = toCsv([{ groupName: "B", text: "xin chào" }]);
         assert.ok(csv.includes("B,,,,,,,xin chào,,"));
+    });
+});
+
+describe("toPostsCsv", () => {
+    const posts = [
+        {
+            id: "fp1",
+            groupId: "123",
+            groupName: "Nhóm A",
+            groupUrl: "https://www.facebook.com/groups/123",
+            text: "Cần mua laptop, giá tốt",
+            permalink: "https://facebook.com/x/posts/1",
+            timeLabel: "31 Tháng 7, 2026",
+            postedAt: "2026-07-31T00:00:00.000Z",
+            collectedAt: "2026-08-01T00:00:00.000Z",
+        },
+    ];
+
+    it("starts with a UTF-8 BOM so Excel reads Vietnamese", () => {
+        assert.equal(toPostsCsv(posts).charCodeAt(0), 0xfeff);
+    });
+
+    it("emits the raw-post header row", () => {
+        const [header] = toPostsCsv(posts).slice(1).split("\r\n");
+        assert.equal(
+            header,
+            "id,group,group_id,group_url,posted_at,time_label,text,permalink," +
+                "author_name,author_url,author_id,collected_at",
+        );
+    });
+
+    it("carries no analysis or score columns", () => {
+        const [header] = toPostsCsv(posts).slice(1).split("\r\n");
+        assert.ok(!/score|category|urgency|summary/.test(header));
+    });
+
+    it("quotes a field containing a comma", () => {
+        assert.match(toPostsCsv(posts), /"Cần mua laptop, giá tốt"/);
+    });
+
+    it("renders a post with no date as empty fields", () => {
+        const csv = toPostsCsv([{ groupName: "B", text: "xin chào", postedAt: null }]);
+        assert.ok(csv.includes(",B,,,,,xin chào,,"));
+    });
+
+    it("emits header only for an empty post list", () => {
+        const rows = toPostsCsv([]).slice(1).trimEnd().split("\r\n");
+        assert.equal(rows.length, 1);
     });
 });
 

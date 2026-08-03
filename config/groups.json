@@ -1,0 +1,23 @@
+{
+  "_huong_dan": [
+    "Dán URL nhóm vào mảng \"groups\" bên dưới, mỗi nhóm một object.",
+    "Bắt buộc: \"url\" (phải bắt đầu bằng http). Tuỳ chọn: \"id\", \"name\".",
+    "\"id\" chỉ dùng để đặt khoá khử trùng lặp — bỏ trống thì tool dùng url thay thế.",
+    "\"name\" chỉ để hiển thị trong báo cáo — đặt gì cũng được.",
+    "rules rỗng + minScore 0 = lấy tất cả bài, không lọc từ khoá.",
+    "Muốn lọc từ khoá thì xem config/groups.example.json.",
+    "Key bắt đầu bằng _ được loadConfig bỏ qua, để nguyên cũng không sao."
+  ],
+
+  "groups": [
+    {
+      "id": "1270622383398741",
+      "name": "Tuyển dụng-Headhunt/Outsource IT (Fullstack, ReactJS, Java, NodeJS, PHP...)",
+      "url": "https://www.facebook.com/groups/1270622383398741"
+    }
+  ],
+
+  "rules": [],
+
+  "minScore": 0
+}
