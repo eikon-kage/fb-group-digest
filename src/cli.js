@@ -11,19 +11,21 @@
  *
  * Each stage writes its output to disk, so any stage can be re-run on its own
  * without repeating the one before it.
+ *
+ * Playwright, the Anthropic SDK and nodemailer are imported inside the command
+ * that needs them rather than at the top of this file. They are by far the
+ * heaviest things this program loads, and a static import made every command
+ * pay for all three — `report`, which only reads a JSON file and writes two
+ * text files, loaded a browser driver and two API clients before doing anything.
  */
 
 import process from "node:process";
-import { buildDigest, classifyPosts } from "./analyze/claude.js";
-import { closeSession, openSession } from "./collect/browser.js";
-import { runLogin } from "./collect/login.js";
-import { collectAll } from "./collect/scrape.js";
 import { loadConfig, loadEnv } from "./config.js";
 import { filterPosts } from "./filter/keywords.js";
 import { log } from "./logger.js";
-import { sendReport } from "./mail/send.js";
 import { toCsv, toPostsCsv } from "./report/csv.js";
 import { renderReport } from "./report/html.js";
+import { addToHistory, loadHistory, recentHistory, saveHistory } from "./store/history.js";
 import { readJson, writeJson, writeText } from "./store/io.js";
 import { commitSeen, loadSeen, partitionBySeen, seenKeys } from "./store/seen.js";
 
@@ -32,6 +34,7 @@ const PATHS = {
     postsCsv: "data/posts.csv",
     analysis: "data/analysis.json",
     seen: "data/seen.json",
+    history: "data/history.json",
 };
 
 /**
@@ -57,6 +60,15 @@ function parseArgs(argv) {
     return { command, flags };
 }
 
+/**
+ * How many days back a report reaches for posts it already reported.
+ *
+ * A run often turns up only a handful of new posts, which reads as a scrap of
+ * paper rather than a digest; pulling the last week in gives it continuity.
+ * `--history 0` turns it off.
+ */
+const DEFAULT_HISTORY_DAYS = 7;
+
 /** @returns {string} e.g. "2026-07-31" */
 function today() {
     return new Date().toISOString().slice(0, 10);
@@ -72,6 +84,10 @@ function reportPaths(flags) {
 }
 
 async function cmdCollect(flags) {
+    const [{ closeSession, openSession }, { collectAll }] = await Promise.all([
+        import("./collect/browser.js"),
+        import("./collect/scrape.js"),
+    ]);
     const config = await loadConfig(flags.config ?? "config/groups.json");
     const startOver = flags.all === "true";
 
@@ -144,6 +160,7 @@ async function cmdMarkRead(flags) {
 }
 
 async function cmdAnalyze(flags) {
+    const { buildDigest, classifyPosts } = await import("./analyze/claude.js");
     const config = await loadConfig(flags.config ?? "config/groups.json");
     const posts = await readJson(PATHS.posts, null);
 
@@ -155,8 +172,19 @@ async function cmdAnalyze(flags) {
     const matched = filterPosts(posts, config.rules, { minScore: config.minScore });
     log.info(`${matched.length} bài khớp bộ lọc.`);
 
+    // `--all` ignores the seen index, the same way it does for `collect`. It is
+    // the way back from a run that reported everything before you read it: the
+    // posts are re-classified and land in the history archive, so the next
+    // report can carry them. It costs a full round of Claude calls, hence the
+    // warning rather than a quiet re-run.
+    const startOver = flags.all === "true";
     const seen = await loadSeen(PATHS.seen);
-    const { fresh, duplicates } = partitionBySeen(matched, seen);
+    const { fresh, duplicates } = startOver
+        ? { fresh: matched, duplicates: [] }
+        : partitionBySeen(matched, seen);
+
+    if (startOver)
+        log.warn(`--all: phân tích lại cả ${matched.length} bài, tốn thêm lời gọi Claude.`);
     if (duplicates.length > 0) log.info(`Bỏ qua ${duplicates.length} bài đã báo cáo lần trước.`);
 
     log.step("Phân tích bằng Claude…");
@@ -177,6 +205,13 @@ async function cmdAnalyze(flags) {
     };
 
     await writeJson(PATHS.analysis, analysis);
+
+    // Archived here rather than in `report`, so the classification is stored
+    // once and every later report reuses it — showing a week of posts costs no
+    // extra Claude calls.
+    const history = await loadHistory(PATHS.history);
+    await saveHistory(PATHS.history, addToHistory(history, classified));
+
     log.info(`Đã lưu kết quả phân tích vào ${PATHS.analysis}`);
     return analysis;
 }
@@ -187,8 +222,20 @@ async function cmdReport(flags) {
         throw new Error(`Chưa có ${PATHS.analysis}. Chạy "npm run analyze" trước.`);
     }
 
+    const days = flags.history === undefined ? DEFAULT_HISTORY_DAYS : Number(flags.history);
+    if (!Number.isFinite(days) || days < 0) {
+        throw new Error(`--history phải là số ngày không âm, nhận được "${flags.history}".`);
+    }
+
+    const previous = recentHistory(await loadHistory(PATHS.history), analysis.posts, { days });
+    if (previous.length > 0) {
+        log.info(`Kèm ${previous.length} bài đã báo cáo trong ${days} ngày qua.`);
+    }
+
     const out = reportPaths(flags);
-    await writeText(out.html, renderReport(analysis));
+    // The CSV stays this run's posts only: it is the machine-readable record of
+    // what was new, and repeating last week's rows in every file would ruin it.
+    await writeText(out.html, renderReport({ ...analysis, previous }));
     await writeText(out.csv, toCsv(analysis.posts));
 
     // Mark as seen only now — if report generation had failed, these posts
@@ -202,6 +249,7 @@ async function cmdReport(flags) {
 }
 
 async function cmdSend(flags) {
+    const { sendReport } = await import("./mail/send.js");
     const out = reportPaths(flags);
     await sendReport({ htmlPath: out.html, csvPath: out.csv });
 }
@@ -236,18 +284,21 @@ Lệnh:
 Tuỳ chọn:
   --config <path>    File cấu hình nhóm/từ khoá (mặc định config/groups.json)
   --all              Với "collect": bỏ qua bộ nhớ, lấy lại tất cả và ghi đè
+                     Với "analyze": phân tích lại cả bài đã báo cáo lần trước
   --from <nguồn>     Với "mark-read": "posts" (mặc định) hoặc "analysis"
   --date <yyyy-mm-dd>  Ngày dùng để đặt tên file báo cáo (mặc định hôm nay)
   --html <path>      Ghi đè đường dẫn file HTML
   --csv <path>       Ghi đè đường dẫn file CSV báo cáo
   --posts-csv <path>   Với "collect": ghi đè đường dẫn CSV bài thô
                        (mặc định data/posts.csv)
+  --history <ngày>   Với "report": kèm lại bài đã báo cáo trong N ngày qua
+                     (mặc định 7, dùng 0 để chỉ hiện bài mới)
   --no-mail          Với "run": tạo báo cáo nhưng không gửi mail
 `);
 }
 
 const COMMANDS = {
-    login: runLogin,
+    login: async (flags) => (await import("./collect/login.js")).runLogin(flags),
     collect: cmdCollect,
     "mark-read": cmdMarkRead,
     analyze: cmdAnalyze,

@@ -148,8 +148,24 @@ describe("renderMarkdown", () => {
         assert.ok(renderMarkdown("**quan trọng**").includes("<strong>quan trọng</strong>"));
     });
 
+    it("renders underscore italics", () => {
+        assert.ok(renderMarkdown("_không có tóm tắt_").includes("<em>không có tóm tắt</em>"));
+    });
+
+    it("leaves underscores inside a word alone", () => {
+        assert.ok(renderMarkdown("biến my_var_name ở đây").includes("my_var_name"));
+    });
+
     it("renders plain lines as paragraphs", () => {
         assert.ok(renderMarkdown("xin chào").includes("<p>xin chào</p>"));
+    });
+
+    it("joins a paragraph wrapped across several lines", () => {
+        assert.equal(renderMarkdown("một câu\nbị xuống dòng"), "<p>một câu bị xuống dòng</p>");
+    });
+
+    it("keeps a heading out of the paragraph that follows it", () => {
+        assert.equal(renderMarkdown("## Tiêu đề\nnội dung"), "<h3>Tiêu đề</h3><p>nội dung</p>");
     });
 
     it("escapes markup embedded in post-derived text", () => {
@@ -183,7 +199,9 @@ describe("renderReport", () => {
     it("produces a self-contained document with no external requests", () => {
         const html = renderReport(input);
         assert.ok(html.startsWith("<!doctype html>"));
-        assert.ok(!/<(script|link)\b/i.test(html));
+        // The filter bar ships as an inline script; nothing may be fetched.
+        assert.ok(!/<link\b/i.test(html));
+        assert.ok(!/<script[^>]*\bsrc=/i.test(html));
         assert.ok(!/https?:\/\/(?!(www\.)?facebook\.com)/.test(html));
     });
 
@@ -208,5 +226,148 @@ describe("renderReport", () => {
     it("renders an empty-state message when nothing matched", () => {
         const html = renderReport({ posts: [], digest: "", stats: input.stats });
         assert.ok(html.includes("Không có bài nào khớp bộ lọc"));
+    });
+
+    it("counts the urgent posts in the stat row", () => {
+        const html = renderReport(input);
+        assert.match(html, /<b>1<\/b><span>đánh dấu gấp<\/span>/);
+    });
+
+    const twoGroups = {
+        ...input,
+        posts: [
+            { groupName: "Nhóm A", text: "bài A" },
+            { groupName: "Nhóm B", text: "bài B" },
+        ],
+    };
+
+    it("links each group section from the index", () => {
+        const html = renderReport(twoGroups);
+        assert.ok(html.includes(`<section class="group" id="nhom-nhom-a"`));
+        assert.ok(html.includes(`href="#nhom-nhom-a"`));
+        assert.ok(html.includes(`href="#nhom-nhom-b"`));
+    });
+
+    it("gives colliding group names distinct anchors", () => {
+        const html = renderReport({
+            ...input,
+            posts: [
+                { groupName: "Nhóm Ạ", text: "một" },
+                { groupName: "Nhom a", text: "hai" },
+            ],
+        });
+        assert.ok(html.includes(`id="nhom-nhom-a"`));
+        assert.ok(html.includes(`id="nhom-nhom-a-2"`));
+    });
+
+    it("omits the index when every post is from one group", () => {
+        assert.ok(!renderReport(input).includes('class="index"'));
+    });
+
+    it("puts urgent posts at the top of their group", () => {
+        const html = renderReport({
+            ...input,
+            posts: [
+                { groupName: "A", text: "bài thường", postedAt: "2026-08-02T00:00:00.000Z" },
+                {
+                    groupName: "A",
+                    text: "bài gấp",
+                    postedAt: "2026-08-01T00:00:00.000Z",
+                    analysis: { urgency: "cao" },
+                },
+            ],
+        });
+        assert.ok(html.indexOf("bài gấp") < html.indexOf("bài thường"));
+    });
+
+    it("folds a post that is many short lines but few characters", () => {
+        const short = Array.from({ length: 12 }, (_, i) => `dòng ${i}`).join("\n");
+        assert.ok(short.length < 420);
+        const html = renderReport({ ...input, posts: [{ groupName: "A", text: short }] });
+        assert.ok(html.includes("<summary>Xem thêm</summary>"));
+    });
+
+    it("keeps a short post unfolded", () => {
+        const html = renderReport({ ...input, posts: [{ groupName: "A", text: "một dòng" }] });
+        assert.ok(!html.includes("<summary>"));
+    });
+
+    it("renders the filter bar hidden, with one chip per group", () => {
+        const html = renderReport(twoGroups);
+        assert.ok(html.includes(`<div class="toolbar" hidden>`));
+        assert.equal((html.match(/class="chip"/g) ?? []).length, 2);
+        assert.ok(html.includes(`data-target="nhom-nhom-a"`));
+        // The search box matches on folded text, so "nhom a" finds "Nhóm A".
+        assert.ok(html.includes(`data-fold="nhom a"`));
+    });
+
+    it("drops the chip row but keeps the filters for a single group", () => {
+        const html = renderReport(input);
+        assert.ok(html.includes(`<div class="toolbar" hidden>`));
+        assert.ok(!html.includes(`class="chip"`));
+    });
+
+    it("renders no filter bar when nothing matched", () => {
+        const html = renderReport({ posts: [], digest: "", stats: input.stats });
+        assert.ok(!html.includes(`class="toolbar"`));
+    });
+
+    it("keys a post's read button on the permalink id", () => {
+        const html = renderReport(input);
+        assert.ok(html.includes(`data-key="p:1"`));
+        assert.ok(html.includes(`data-act="read"`));
+    });
+
+    it("falls back to the post id when there is no permalink", () => {
+        const html = renderReport({ ...input, posts: [{ groupName: "A", id: "abc", text: "x" }] });
+        assert.ok(html.includes(`data-key="abc"`));
+    });
+
+    it("omits the read button for a post with no stable key", () => {
+        const html = renderReport({ ...input, posts: [{ groupName: "A", text: "x" }] });
+        assert.ok(!html.includes(`data-act="read"`));
+    });
+
+    it("carries posts from an earlier run into the same group section", () => {
+        const html = renderReport({
+            ...input,
+            posts: [{ groupName: "Nhóm A", id: "new", text: "bài mới" }],
+            previous: [{ groupName: "Nhóm A", id: "old", text: "bài cũ", previous: true }],
+        });
+        assert.ok(html.includes("bài mới"));
+        assert.ok(html.includes("bài cũ"));
+        assert.ok(html.includes(`<span class="tag past"`));
+        assert.equal((html.match(/class="group"/g) ?? []).length, 1);
+        assert.ok(html.includes(`<b>1</b><span>từ lần trước</span>`));
+        assert.ok(html.includes(`data-act="only-new"`));
+    });
+
+    it('offers no "chỉ bài mới" button when nothing was carried over', () => {
+        assert.ok(!renderReport(input).includes(`data-act="only-new"`));
+        assert.ok(!renderReport(input).includes("từ lần trước"));
+    });
+
+    it("keeps a carried-over post out of the urgent band", () => {
+        // It had its turn at the top of the report it first appeared in.
+        const html = renderReport({
+            ...input,
+            posts: [{ groupName: "A", text: "bài mới", postedAt: "2026-08-19T00:00:00.000Z" }],
+            previous: [
+                {
+                    groupName: "A",
+                    text: "bài cũ gấp",
+                    postedAt: "2026-08-14T00:00:00.000Z",
+                    previous: true,
+                    analysis: { urgency: "cao" },
+                },
+            ],
+        });
+        assert.ok(html.indexOf("bài mới") < html.indexOf("bài cũ gấp"));
+    });
+
+    it('marks urgent posts for the "chỉ gấp" filter', () => {
+        const html = renderReport(twoGroups);
+        assert.equal((html.match(/data-urgent="1"/g) ?? []).length, 0);
+        assert.ok(renderReport(input).includes(`data-urgent="1"`));
     });
 });

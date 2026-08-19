@@ -1,16 +1,16 @@
 /**
  * Post timestamp parsing.
  *
- * This is best-effort, and usually yields nothing for a group post. Facebook
- * scrambles the post's own timestamp in the DOM — one element per character,
- * shuffled, reassembled visually with CSS — so `postedAt` is normally null.
- * A readable label does turn up in two cases, and both are handled here:
- * an absolute date on an older post ("Friday 31 July 2026 at 03:38"), and a
- * relative one that escaped scrambling ("15h", "3 ngày", "2w").
+ * This is best-effort. `scrape.js` reads whatever the post header shows and
+ * hands it over here in one of three shapes: the abbreviated relative label
+ * ("15h", "3 ngày", "2w"), the spelled-out one Facebook's SVG-sprite rendering
+ * uses ("34 minutes ago", "3 days ago"), and an absolute date on an older post
+ * ("Friday 31 July 2026 at 03:38").
  *
  * Relative labels are coarse: "15h" could be anywhere in a one-hour band, and
  * "2w" rounds hard. Treat the result as an approximation — `collectedAt` is
- * the reliable timestamp.
+ * the reliable timestamp. A post whose header could not be read at all keeps a
+ * null `postedAt`, so the report says so rather than inventing a date.
  *
  * `new Date()` cannot read either form, so the fields are pulled out by hand.
  * A label that does not parse yields null, and the caller keeps the post
@@ -81,8 +81,12 @@ const RELATIVE_UNITS = new Map([
     ["tuần", 604_800_000],
 ]);
 
-/** "15h", "3 ngày", "2 weeks" — the whole label must be just that. */
-const RELATIVE_PATTERN = /^(\d{1,3})\s*([a-zà-ỹ]+)$/;
+/**
+ * "15h", "3 ngày", "2 weeks", "34 minutes ago" — the whole label must be just
+ * that. The trailing "ago"/"trước" comes from the SVG-sprite rendering, where
+ * Facebook spells the label out instead of abbreviating it.
+ */
+const RELATIVE_PATTERN = /^(\d{1,3})\s*([a-zà-ỹ]+)(?:\s+(?:ago|trước))?$/;
 
 /** "Just now" / "Vừa xong" — treat as this instant. */
 const JUST_NOW = /^(just now|vừa xong|a few seconds ago)$/;

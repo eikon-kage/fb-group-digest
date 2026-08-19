@@ -57,7 +57,7 @@ cp .env.example .env                       # điền SMTP + (tuỳ chọn) API k
 cp config/groups.example.json config/groups.json   # điền nhóm + từ khoá
 ```
 
-Chạy `npm test` để chắc chắn mọi thứ ổn (73 test, không cần mạng).
+Chạy `npm test` để chắc chắn mọi thứ ổn (117 test, không cần mạng).
 
 ### Đăng nhập một lần
 
@@ -99,10 +99,39 @@ Hoặc chạy từng bước (mỗi bước ghi kết quả ra đĩa nên chạy
 
 ```bash
 npm run collect   # → data/posts.json
-npm run analyze   # → data/analysis.json
+npm run analyze   # → data/analysis.json (+ data/history.json)
 npm run report    # → out/report-YYYY-MM-DD.html + .csv
 npm run send      # gửi báo cáo gần nhất
 ```
+
+Một lệnh không có script npm, gọi thẳng CLI:
+
+```bash
+node src/cli.js mark-read              # đánh dấu bài đang có là đã đọc, lần sau bỏ qua
+node src/cli.js mark-read --from analysis   # chỉ đánh dấu những bài đã vào báo cáo
+```
+
+`node src/cli.js help` in ra toàn bộ lệnh và tuỳ chọn.
+
+### Tuỳ chọn
+
+Qua `npm run`, tuỳ chọn phải đứng sau `--`:
+`npm run collect -- --all`. Gọi thẳng `node src/cli.js collect --all` thì không cần.
+
+| Tuỳ chọn              | Áp dụng cho        | Ý nghĩa                                                    |
+| --------------------- | ------------------ | ---------------------------------------------------------- |
+| `--config <path>`     | `collect`, `analyze` | File cấu hình nhóm/từ khoá (mặc định `config/groups.json`) |
+| `--all`               | `collect`          | Bỏ qua bộ nhớ, lấy lại tất cả và ghi đè `data/posts.json`   |
+| `--all`               | `analyze`          | Phân tích lại cả bài đã báo cáo lần trước (tốn thêm lời gọi Claude) |
+| `--posts-csv <path>`  | `collect`          | Ghi đè đường dẫn CSV bài thô (mặc định `data/posts.csv`)    |
+| `--from <nguồn>`      | `mark-read`        | `posts` (mặc định) hoặc `analysis`                          |
+| `--date <yyyy-mm-dd>` | `report`, `send`   | Ngày dùng để đặt tên file báo cáo (mặc định hôm nay)        |
+| `--html <path>`       | `report`, `send`   | Ghi đè đường dẫn file HTML                                  |
+| `--csv <path>`        | `report`, `send`   | Ghi đè đường dẫn file CSV báo cáo                           |
+| `--history <ngày>`    | `report`           | Kèm lại bài đã báo cáo trong N ngày qua (mặc định 7, `0` = tắt) |
+| `--no-mail`           | `run`              | Tạo báo cáo nhưng không gửi mail                            |
+
+`run` truyền nguyên tuỳ chọn xuống cả bốn bước, nên dùng được hết bảng trên.
 
 Chạy hằng ngày lúc 8h sáng:
 
@@ -165,6 +194,56 @@ Rule không có clause nào sẽ báo lỗi lúc load config, thay vì âm thầ
 
 ---
 
+## Đọc báo cáo HTML
+
+File `out/report-*.html` mở bằng trình duyệt là đủ, không cần server.
+
+- **Chọn nhóm**: thanh lọc dính ở đầu trang có một chip cho mỗi nhóm. Bấm để
+  bật/tắt nhóm, **Alt/⌘ + bấm** để chỉ xem một nhóm. Nhiều nhóm thì gõ vào ô
+  *Tìm nhóm…* rồi bấm **Tất cả** / **Bỏ hết** — hai nút này chỉ áp cho các chip
+  đang hiện, nên "chọn đúng 5 nhóm tuyển dụng" là gõ *tuyen dung* → **Tất cả**.
+  Số trên chip là số bài **chưa đọc** của nhóm đó.
+- **Đã đọc**: mỗi bài có nút **✓ Đã đọc** ở góc dưới phải, mỗi nhóm có
+  **✓ Cả nhóm** ở tiêu đề. Bài đã đánh dấu bị ẩn ngay (tắt **Ẩn đã đọc** để xem
+  lại và bỏ đánh dấu, hoặc **Xoá đánh dấu** để xoá sạch).
+- **Chỉ gấp**: chỉ hiện những bài Claude gắn `urgency: cao`.
+
+Trạng thái đã đọc và bộ nhóm đang chọn lưu trong `localStorage` của trình duyệt
+(giữ 90 ngày), khoá theo id permalink giống `data/seen.json` — nên đóng file mở
+lại vẫn giữ nguyên, và cùng một bài xuất hiện ở báo cáo sau vẫn nhận ra. Đây là
+bộ lọc **khi đọc**, không đụng tới `data/seen.json`; muốn lần `collect` sau bỏ
+qua thì vẫn dùng `node src/cli.js mark-read`.
+
+Thanh lọc và các nút chạy bằng JavaScript. Mail client thường chặn script, nên
+báo cáo gửi qua email hiện đúng như trước: không thanh lọc, chỉ có dãy link nhảy
+tới từng nhóm.
+
+---
+
+## Bài từ lần chạy trước
+
+Một lần chạy thường chỉ ra vài bài mới, đọc rời rạc. Nên báo cáo mặc định kèm
+lại **mọi bài đã báo cáo trong 7 ngày qua**, trộn chung vào đúng nhóm của nó,
+gắn nhãn mờ *lần trước* và có tooltip ghi nó nằm trong báo cáo ngày nào.
+
+- Đổi cửa sổ: `node src/cli.js report --history 14`. Tắt hẳn: `--history 0`.
+- Thanh lọc có thêm nút **Chỉ bài mới** để ẩn chúng khi cần (trạng thái được nhớ
+  lại giữa các lần mở file, cùng chỗ với "Ẩn đã đọc").
+- Bài cũ **không** được đẩy lên đầu dù gắn `gấp` — nó đã có lượt đứng đầu ở báo
+  cáo lần trước rồi.
+- CSV vẫn chỉ chứa bài mới của lần chạy này, để còn dùng làm bản ghi máy đọc.
+
+Kho lưu là `data/history.json`, ghi ở bước `analyze` cùng lúc với kết quả phân
+tích, giữ 30 ngày. Vì đã lưu sẵn kết quả phân tích nên hiện lại bài cũ **không
+tốn thêm lời gọi Claude** nào.
+
+Kho này chỉ có dữ liệu từ lúc bạn cập nhật tính năng trở đi. Muốn kéo lại những
+bài đã bị đánh dấu "đã báo cáo" từ trước, chạy `npm run analyze -- --all` một
+lần: nó phân tích lại toàn bộ `data/posts.json` (tốn lời gọi Claude) và nạp
+chúng vào kho.
+
+---
+
 ## Khử trùng lặp
 
 `data/seen.json` lưu vân tay (fingerprint) của mọi bài đã báo cáo, giữ trong 30
@@ -176,6 +255,24 @@ render), nên vẫn nhận ra bài cũ sau khi Facebook re-render.
 
 Việc đánh dấu "đã báo cáo" diễn ra **sau khi** file báo cáo được ghi thành công
 — nếu bước report lỗi, bài vẫn xuất hiện ở lần chạy sau.
+
+### Lần chạy sau chỉ lấy bài mới
+
+Feed được ép sắp xếp theo thời gian (`sorting_setting=CHRONOLOGICAL`), nên khi
+cuộn xuống mà **đáy** cửa sổ feed toàn bài đã lấy lần trước thì phần bài mới đã
+đi qua hết — script dừng nhóm đó ngay. Ngưỡng là `STOP_AFTER_SEEN` (mặc định 5
+bài liên tiếp); một cửa sổ mà **không còn bài mới nào** cũng đủ để dừng, để nhóm
+ít bài hơn ngưỡng vẫn không bị cuộn tới đáy.
+
+Đếm từ dưới lên là có chủ đích: bài ghim nằm trên đầu feed và đã được báo cáo từ
+lần đầu, nên nếu đếm gộp thì một bài ghim đã đủ làm script tưởng đã hết bài mới.
+
+Chạy lần 1 lấy 10 bài, lần 2 nhóm có thêm 3 bài → lần 2 chỉ lấy 3 bài đó rồi
+dừng, không cuộn tiếp xuống những bài cũ hơn mốc của lần 1. Muốn cào lại toàn bộ
+thì dùng `npm run collect -- --all` (bỏ qua bộ nhớ và ghi đè `data/posts.json`).
+
+Bài đã có sẵn trong `data/posts.json` cũng được tính là "đã lấy", nên chạy
+`collect` hai lần liên tiếp không cào lại từ đầu, kể cả khi chưa chạy `report`.
 
 ---
 
@@ -221,7 +318,8 @@ src/
   store/
     io.js             đọc/ghi JSON
     seen.js           index khử trùng lặp + dọn bản ghi cũ
-test/                 73 test, chạy offline
+    history.js        kho bài đã báo cáo, để báo cáo sau kèm lại
+test/                 140 test, chạy offline
 ```
 
 ---
@@ -231,13 +329,17 @@ test/                 73 test, chạy offline
 - **DOM Facebook hay đổi.** `scrape.js` bám vào `[role="article"]` — thuộc tính
   accessibility nên ổn định hơn class name, nhưng không có gì bảo đảm. Nếu bỗng
   nhiên thu được 0 bài, đây là chỗ cần sửa đầu tiên.
-- **Không lọc được theo ngày đăng.** Facebook xáo trộn timestamp của bài ngay
-  trong DOM: mỗi ký tự một element, thứ tự bị đảo, ghép lại đúng bằng CSS. Đọc
-  được nó đồng nghĩa với gỡ một biện pháp chống scrape, việc mà tool này cố ý
-  không làm. Nên `postedAt` thường là `null`, và **không có tuỳ chọn "chỉ lấy N
-  ngày gần nhất"**. Thay vào đó `collect` ép feed sang thứ tự thời gian
+- **Giờ đăng chỉ là xấp xỉ, và không phải bài nào cũng có.** Facebook hiển thị
+  giờ đăng theo hai cách: xáo trộn từng ký tự rồi ghép lại bằng CSS, hoặc vẽ
+  nguyên nhãn bằng SVG sprite (`<use xlink:href="#SvgT1">`, chữ nằm trong một
+  `<text>` ở chỗ khác). `scrape.js` đọc cả hai — đo trên một nhóm thật:
+  15/18 bài có giờ. Bài đọc không ra vẫn giữ `postedAt: null` và báo cáo ghi
+  "không rõ giờ đăng" thay vì bịa ra ngày.
+  Nhãn là tương đối ("3 hours ago", "18h") nên sai số tới một giờ; `collectedAt`
+  mới là mốc chính xác. Vì vậy vẫn **không có tuỳ chọn "chỉ lấy N ngày gần
+  nhất"** — `collect` ép feed sang thứ tự thời gian
   (`?sorting_setting=CHRONOLOGICAL`) rồi cuộn từ mới về cũ, giới hạn bằng
-  `MAX_POSTS_PER_GROUP`. `collectedAt` mới là mốc thời gian đáng tin.
+  `MAX_POSTS_PER_GROUP`.
 - **Permalink không phải bài nào cũng có.** Link timestamp của bài chỉ chứa
   query tracking, không có đường dẫn. Permalink lấy được từ link của bình luận
   (chúng trỏ về bài cha), nên bài chưa có bình luận thì `permalink` là `null`.

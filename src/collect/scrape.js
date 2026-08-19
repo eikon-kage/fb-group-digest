@@ -22,11 +22,17 @@
  *    zero-width joiners. Text is therefore read from the post's message node
  *    only, never from the whole card.
  *
- * 4. A post's own metadata is withheld until touched. Its timestamp is split
- *    one character per element, shuffled, and put back in visual order by CSS;
- *    `paintedText` reads it back by laid-out position. Its permalink anchor
+ * 4. A post's own metadata is withheld until touched. Its permalink anchor
  *    starts as a bare tracking query and is rewritten to the real URL only on a
  *    genuine hover, which `primeTimestamps` performs.
+ *
+ * 5. The timestamp comes in two renderings, and both are read here. Most cards
+ *    split it one character per element, shuffle them, and put them back in
+ *    visual order with CSS — `paintedText` reads that back by laid-out
+ *    position. The rest hand the label to an SVG sprite: the link holds only
+ *    `<use xlink:href="#SvgT1">` and the words sit in a `<text>` element
+ *    elsewhere in the document, so the link itself reads as empty. Handling
+ *    only the first form left 1 post in 20 with a date.
  */
 
 import { envBool, envInt } from "../config.js";
@@ -45,8 +51,22 @@ const TRAILING_EXPAND = /\s*(See more|Xem thêm)…?\s*$/;
 /** Stop scrolling after this many consecutive scrolls that yield nothing new. */
 const BARREN_SCROLL_LIMIT = 4;
 
-/** Below twice the 900px viewport, so few posts scroll by unhovered. */
+/** How far one step of the walk advances the feed. */
 const SCROLL_STEP_PX = 1600;
+
+/**
+ * The wheel moves in hops this size, with a hover pass between them.
+ *
+ * It has to stay under the 900px viewport: a timestamp link is blank until the
+ * mouse touches it, and the mouse can only reach what is on screen. Hopping
+ * 1600px at once left a ~700px band that was below the fold on one step and
+ * above it on the next, so every post in that band came back with no date —
+ * measured on a live group, 10 of 11 posts.
+ */
+const SCROLL_HOP_PX = 700;
+
+/** How long to wait before re-reading a window for the timestamps it lacked. */
+const TIMESTAMP_SETTLE_MS = 1500;
 
 /** Upper bound on hovers per scroll step; only a handful are ever on screen. */
 const PRIME_ATTEMPTS_PER_STEP = 12;
@@ -70,6 +90,15 @@ export function chronologicalUrl(url) {
 /**
  * Walk one group's feed and return its posts, newest first.
  *
+ * The walk stops at whichever comes first: `MAX_POSTS_PER_GROUP` posts, the
+ * bottom of the window reaching posts an earlier run already reported (see
+ * `atSeenBoundary` — this is the one that makes a second run cheap),
+ * `BARREN_SCROLL_LIMIT` scrolls that yield nothing, or `SCROLLS_PER_GROUP`.
+ *
+ * There is no cutoff by post age, deliberately. A post's timestamp is usually
+ * readable now, but not always, and it is only accurate to the hour — "stop at
+ * N days back" would stop on the first post whose date could not be read.
+ *
  * @param {import("playwright").Page} page
  * @param {{ id?: string, name?: string, url: string }} group
  * @param {{ seen?: Record<string, string> }} [options]
@@ -78,10 +107,9 @@ export function chronologicalUrl(url) {
 export async function collectGroup(page, group, options = {}) {
     const maxScrolls = envInt("SCROLLS_PER_GROUP", 120);
     const maxPosts = envInt("MAX_POSTS_PER_GROUP", 60);
-    // Walking back into already-reported territory means the new posts have
-    // been passed. A margin is allowed because pinned posts and the odd
-    // out-of-order card sit above the chronological run.
-    const seenStopLimit = envInt("STOP_AFTER_SEEN", 20);
+    // How deep a run of already-reported posts at the *bottom* of the window
+    // has to get before the walk is called finished. See `mergeWindow`.
+    const seenStopStreak = envInt("STOP_AFTER_SEEN", 5);
     const seen = options.seen ?? {};
     const alreadySeen = new Set();
 
@@ -112,52 +140,56 @@ export async function collectGroup(page, group, options = {}) {
     for (let step = 0; step < maxScrolls; step++) {
         await expandTruncatedPosts(page);
         await primeTimestamps(page);
+        const stamps = await page.evaluate(countTimestampAnchors);
 
         const before = collected.size;
-        for (const raw of await page.evaluate(extractPosts)) {
-            const post = normalizePost(raw, group);
-            if (post.text.length < 20) continue;
+        // Not named `window`: page-context helpers in this file mean the
+        // browser global by that name, and one of the two should stay obvious.
+        const context = { group, seen, collected, alreadySeen };
+        const raw = await page.evaluate(extractPosts);
+        let merged = mergeWindow(raw, context);
 
-            if (isSeen(seen, post)) {
-                for (const key of seenKeys(post)) alreadySeen.add(key);
-                continue;
-            }
-
-            // A post first seen before its timestamp was hovered arrives with
-            // no link and no date. Later steps get another chance at both, so
-            // an existing entry is upgraded rather than skipped.
-            const fpKey = `fp:${post.id}`;
-            const key = post.permalink ?? fpKey;
-            const existing = collected.get(key) ?? collected.get(fpKey);
-
-            if (existing) {
-                if (existing.permalink === null) existing.permalink = post.permalink;
-                if (existing.postedAt === null && post.postedAt !== null) {
-                    existing.postedAt = post.postedAt;
-                    existing.timeLabel = post.timeLabel;
-                }
-                continue;
-            }
-
-            collected.set(key, post);
+        // A freshly rendered card carries an empty timestamp link; Facebook
+        // fills in the real one a beat later. Reading the window a second time
+        // costs one sleep per step and is the difference between most posts
+        // carrying a date and almost none of them — measured on a live group,
+        // 1 of 20 posts before, most of them after. `mergeWindow` backfills, so
+        // the second read only adds what the first one missed.
+        if (raw.some((post) => post.timeLabel === null)) {
+            await sleep(TIMESTAMP_SETTLE_MS);
+            merged = mergeWindow(await page.evaluate(extractPosts), context);
         }
 
+        // Priming is the fragile half of the scrape: an unhovered timestamp
+        // link carries no text at all, so a step where `trống` stays high is
+        // the reason a batch of posts came back with no date.
+        log.debug(
+            `bước ${step}: ${raw.length} bài trong khung, ` +
+                `${raw.filter((post) => post.timeLabel !== null).length} có nhãn giờ, ` +
+                `link giờ: ${stamps.filled} đã hiện / ${stamps.blank} còn trống`,
+        );
+
         // The feed is chronological, so the run walks back through it until the
-        // post cap is hit, the seen index says the new posts are behind us, or
-        // the feed stops yielding anything at all.
+        // post cap is hit, the bottom of the window lands in already-reported
+        // territory, or the feed stops yielding anything at all.
         if (collected.size >= maxPosts) break;
-        if (seenStopLimit > 0 && alreadySeen.size >= seenStopLimit) {
-            log.info(`Gặp ${alreadySeen.size} bài đã lấy lần trước — dừng ở đây.`);
+        if (atSeenBoundary(merged, { streak: seenStopStreak, scrolled: step > 0 })) {
+            log.info(`Chạm ${merged.tailSeen} bài liên tiếp đã lấy lần trước — hết bài mới.`);
             break;
         }
         barrenScrolls = collected.size === before ? barrenScrolls + 1 : 0;
         if (barrenScrolls >= BARREN_SCROLL_LIMIT) break;
 
-        // Shorter than the viewport on purpose: every timestamp link has to
-        // pass through the visible area on some step, or it never gets hovered
-        // and the post ends up with no link. It is not randomized to look human.
-        await page.mouse.wheel(0, SCROLL_STEP_PX);
-        await sleep(1200);
+        // Not randomized to look human — the hop size is what makes every
+        // timestamp link pass through the visible area at least once.
+        for (let moved = 0; moved < SCROLL_STEP_PX; moved += SCROLL_HOP_PX) {
+            await page.mouse.wheel(0, Math.min(SCROLL_HOP_PX, SCROLL_STEP_PX - moved));
+            await sleep(600);
+            // Cheap pass only: the mouse visits what is now on screen. The
+            // expensive straggler hovers stay at the top of the next step.
+            await primeVisible(page);
+        }
+        await sleep(600);
         assertNotCheckpointed(page);
     }
 
@@ -174,6 +206,98 @@ export async function collectGroup(page, group, options = {}) {
     );
 
     return posts;
+}
+
+/**
+ * Merge one window of extracted posts into the run's accumulator.
+ *
+ * The return value describes where the window sits relative to the posts an
+ * earlier run already reported. `tailSeen` is the run of already-reported posts
+ * at the *bottom* of the window — counted from the end, so it resets on the
+ * last unreported post rather than on the first.
+ *
+ * That direction is the whole point. Pinned posts sit above the chronological
+ * run and are reported on the first run, so a plain count of already-seen posts
+ * treats a pinned post as evidence that the walk is finished. Counting from the
+ * bottom ignores anything above the newest unreported post, which is exactly
+ * what "have we walked past the new posts yet" means in a chronological feed.
+ *
+ * Posts too short to be worth reporting are dropped without counting either
+ * way: they are neither news nor evidence that the news has run out.
+ *
+ * @param {Array<object>} rawPosts In feed order, newest first.
+ * @param {{
+ *   group: { id?: string, name?: string, url: string },
+ *   seen: Record<string, string>,
+ *   collected: Map<string, object>,
+ *   alreadySeen: Set<string>,
+ * }} context `collected` and `alreadySeen` are mutated.
+ * @returns {{ eligible: number, tailSeen: number }}
+ */
+export function mergeWindow(rawPosts, context) {
+    const { group, seen, collected, alreadySeen } = context;
+    let eligible = 0;
+    let tailSeen = 0;
+
+    for (const raw of rawPosts) {
+        const post = normalizePost(raw, group);
+        if (post.text.length < 20) continue;
+        eligible++;
+
+        if (isSeen(seen, post)) {
+            for (const key of seenKeys(post)) alreadySeen.add(key);
+            tailSeen++;
+            continue;
+        }
+
+        // Unreported — so whatever run of old posts was building above it does
+        // not reach the bottom of the window, and the walk is not finished.
+        tailSeen = 0;
+
+        // A post first seen before its timestamp was hovered arrives with no
+        // link and no date. Later steps get another chance at both, so an
+        // existing entry is upgraded rather than skipped.
+        const fpKey = `fp:${post.id}`;
+        const key = post.permalink ?? fpKey;
+        const existing = collected.get(key) ?? collected.get(fpKey);
+
+        if (existing) {
+            if (existing.permalink === null) existing.permalink = post.permalink;
+            if (existing.postedAt === null && post.postedAt !== null) {
+                existing.postedAt = post.postedAt;
+                existing.timeLabel = post.timeLabel;
+            }
+            continue;
+        }
+
+        collected.set(key, post);
+    }
+
+    return { eligible, tailSeen };
+}
+
+/**
+ * Has the walk reached the posts an earlier run already reported?
+ *
+ * Two ways to decide yes, because one alone leaves a gap:
+ *
+ * - A deep enough run of old posts at the bottom of the window. The margin is
+ *   there for the odd card that turns up out of chronological order.
+ * - Nothing in the window is new at all. A group whose entire history is
+ *   shorter than that margin can never build the run, and without this it would
+ *   be walked to the end of the feed on every run. Only after a scroll: the
+ *   first window can be a single card that has not finished loading, and one
+ *   old card is not evidence of anything.
+ *
+ * @param {{ eligible: number, tailSeen: number }} window
+ * @param {{ streak: number, scrolled: boolean }} options
+ * @returns {boolean}
+ */
+export function atSeenBoundary(window, options) {
+    if (options.streak <= 0) return false;
+    if (window.tailSeen === 0) return false;
+    if (window.tailSeen >= options.streak) return true;
+    return options.scrolled && window.tailSeen === window.eligible;
 }
 
 /**
@@ -231,6 +355,32 @@ async function expandTruncatedPosts(page) {
 }
 
 /**
+ * Hover every unprimed timestamp link currently on screen.
+ *
+ * This is the whole reason the walk scrolls in small hops: an unhovered link
+ * has no text at all — Facebook fills in both the label and the real href on
+ * the first genuine mouse-over — so a post the mouse never reached has no date.
+ *
+ * @param {import("playwright").Page} page
+ * @returns {Promise<number>} how many anchors were touched
+ */
+async function primeVisible(page) {
+    let moved = 0;
+
+    for (let i = 0; i < PRIME_ATTEMPTS_PER_STEP; i++) {
+        const spot = await page.evaluate(findNextTimestampSpot);
+        if (spot === null) break;
+        await page.mouse.move(spot.x, spot.y);
+        moved++;
+    }
+
+    // React rewrites the href in its own tick; without this the very next
+    // extract reads the anchor before it has been filled in.
+    if (moved > 0) await sleep(200);
+    return moved;
+}
+
+/**
  * Hover every post's timestamp link so Facebook fills in its real href.
  *
  * A post header's timestamp starts out pointing at a bare "?__cft__[0]=…"
@@ -248,19 +398,12 @@ async function expandTruncatedPosts(page) {
  * @param {import("playwright").Page} page
  */
 async function primeTimestamps(page) {
-    let moved = 0;
-
     // Two passes, in order of cost. First the mouse visits anchors already on
     // screen: cheap, and it disturbs nothing. Then `hover` handles whatever is
     // left, which it reaches by scrolling — that scroll re-renders the feed and
     // makes a third of these calls time out, hence the small budget and the
     // swallowed errors. Measured together they beat either pass alone.
-    for (let i = 0; i < PRIME_ATTEMPTS_PER_STEP; i++) {
-        const spot = await page.evaluate(findNextTimestampSpot);
-        if (spot === null) break;
-        await page.mouse.move(spot.x, spot.y);
-        moved++;
-    }
+    let moved = await primeVisible(page);
 
     const stragglers = await page.evaluate(markUnprimedAnchors);
     for (let i = 0; i < stragglers; i++) {
@@ -279,7 +422,7 @@ async function primeTimestamps(page) {
 }
 
 /**
- * Runs inside the page. Tags timestamp links that are still unrewritten and
+ * Runs inside the page. Tags timestamp links that are still blank and
  * off-screen, so Playwright can scroll to each in turn.
  *
  * @returns {number}
@@ -292,6 +435,45 @@ function markUnprimedAnchors() {
     const feed = document.querySelector('[role="feed"]');
     if (!feed) return 0;
 
+    /**
+     * Can a timestamp be read off this link without touching it?
+     *
+     * Two renderings have to be checked. Most cards paint the characters as
+     * text nodes; some hand the whole label to an SVG sprite, where the text
+     * lives in a <text> element elsewhere in the document and the link itself
+     * is empty. Only a link with neither is worth a hover.
+     */
+    const hasStamp = (anchor) => {
+        // The joiners are stripped one class at a time: a range that mixes a
+        // combining mark in with the rest is a lint error, and rightly so.
+        const visible = (anchor.textContent ?? "")
+            .replace(/[\u200b-\u200f\u2060\ufeff]/gu, "")
+            .replace(/\u034f/gu, "")
+            .trim();
+        if (visible !== "") return true;
+        for (const use of anchor.querySelectorAll("use")) {
+            const id = (use.getAttribute("xlink:href") ?? use.getAttribute("href") ?? "").slice(1);
+            if (id && (document.getElementById(id)?.textContent ?? "").trim() !== "") return true;
+        }
+        return false;
+    };
+
+    const isHeaderLink = (anchor) => {
+        const href = anchor.getAttribute("href") ?? "";
+        if (!(href.startsWith("?") || /\/(posts|permalink)\/\d+/.test(href))) return false;
+        return !anchor.closest('[aria-label^="Comment by"], [aria-label^="Bình luận của"]');
+    };
+
+    /**
+     * A hover is worth its cost while either half is still missing: an href
+     * that is still the bare "?__cft__" tracking query has no permalink in it
+     * yet, and a link with no stamp has no date. Skipping the first half cost
+     * two thirds of the permalinks in a measured run.
+     */
+    const needsWaking = (anchor) =>
+        isHeaderLink(anchor) &&
+        ((anchor.getAttribute("href") ?? "").startsWith("?") || !hasStamp(anchor));
+
     let tagged = 0;
     const seen = new Set();
 
@@ -302,8 +484,7 @@ function markUnprimedAnchors() {
         seen.add(card);
 
         for (const anchor of card.querySelectorAll("a")) {
-            if (!(anchor.getAttribute("href") ?? "").startsWith("?")) continue;
-            if (anchor.closest('[aria-label^="Comment by"]')) continue;
+            if (!needsWaking(anchor)) continue;
             const box = anchor.getBoundingClientRect();
             if (box.width === 0 || box.height === 0) continue;
             anchor.setAttribute("data-fbdigest-ts", String(tagged));
@@ -330,6 +511,45 @@ function findNextTimestampSpot() {
     const feed = document.querySelector('[role="feed"]');
     if (!feed) return null;
 
+    /**
+     * Can a timestamp be read off this link without touching it?
+     *
+     * Two renderings have to be checked. Most cards paint the characters as
+     * text nodes; some hand the whole label to an SVG sprite, where the text
+     * lives in a <text> element elsewhere in the document and the link itself
+     * is empty. Only a link with neither is worth a hover.
+     */
+    const hasStamp = (anchor) => {
+        // The joiners are stripped one class at a time: a range that mixes a
+        // combining mark in with the rest is a lint error, and rightly so.
+        const visible = (anchor.textContent ?? "")
+            .replace(/[\u200b-\u200f\u2060\ufeff]/gu, "")
+            .replace(/\u034f/gu, "")
+            .trim();
+        if (visible !== "") return true;
+        for (const use of anchor.querySelectorAll("use")) {
+            const id = (use.getAttribute("xlink:href") ?? use.getAttribute("href") ?? "").slice(1);
+            if (id && (document.getElementById(id)?.textContent ?? "").trim() !== "") return true;
+        }
+        return false;
+    };
+
+    const isHeaderLink = (anchor) => {
+        const href = anchor.getAttribute("href") ?? "";
+        if (!(href.startsWith("?") || /\/(posts|permalink)\/\d+/.test(href))) return false;
+        return !anchor.closest('[aria-label^="Comment by"], [aria-label^="Bình luận của"]');
+    };
+
+    /**
+     * A hover is worth its cost while either half is still missing: an href
+     * that is still the bare "?__cft__" tracking query has no permalink in it
+     * yet, and a link with no stamp has no date. Skipping the first half cost
+     * two thirds of the permalinks in a measured run.
+     */
+    const needsWaking = (anchor) =>
+        isHeaderLink(anchor) &&
+        ((anchor.getAttribute("href") ?? "").startsWith("?") || !hasStamp(anchor));
+
     const seen = new Set();
 
     for (const message of document.querySelectorAll('[data-ad-rendering-role="story_message"]')) {
@@ -339,9 +559,11 @@ function findNextTimestampSpot() {
         seen.add(card);
 
         for (const anchor of card.querySelectorAll("a")) {
-            if (!(anchor.getAttribute("href") ?? "").startsWith("?")) continue;
-            if (anchor.hasAttribute("data-fbdigest-primed")) continue;
-            if (anchor.closest('[aria-label^="Comment by"]')) continue;
+            if (!needsWaking(anchor)) continue;
+            // Two attempts: the first mouse-over sometimes lands while React is
+            // re-rendering the card and does nothing. A link that woke up has
+            // text, so it stops being a candidate above.
+            if (Number(anchor.getAttribute("data-fbdigest-primed") ?? 0) >= 2) continue;
 
             const box = anchor.getBoundingClientRect();
             if (box.width === 0 || box.height === 0) continue;
@@ -354,12 +576,40 @@ function findNextTimestampSpot() {
             if (y < 1 || y > window.innerHeight - 1) continue;
             if (x < 1 || x > window.innerWidth - 1) continue;
 
-            anchor.setAttribute("data-fbdigest-primed", "1");
+            const tries = Number(anchor.getAttribute("data-fbdigest-primed") ?? 0);
+            anchor.setAttribute("data-fbdigest-primed", String(tries + 1));
             return { x, y };
         }
     }
 
     return null;
+}
+
+/**
+ * Runs inside the page. How many timestamp links have been woken up.
+ *
+ * A link Facebook has filled in points at the post; one still waiting carries
+ * only the "?__cft__" tracking query and renders empty.
+ *
+ * @returns {{ filled: number, blank: number }}
+ */
+function countTimestampAnchors() {
+    const feed = document.querySelector('[role="feed"]');
+    if (!feed) return { filled: 0, blank: 0 };
+
+    let filled = 0;
+    let blank = 0;
+
+    for (const anchor of feed.querySelectorAll("a")) {
+        const href = anchor.getAttribute("href") ?? "";
+        const box = anchor.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) continue;
+        if (href.startsWith("?")) blank++;
+        else if (/\/(posts|permalink)\/\d+/.test(href) && (anchor.textContent ?? "") !== "")
+            filled++;
+    }
+
+    return { filled, blank };
 }
 
 /**
@@ -377,10 +627,14 @@ function extractPosts() {
     const POST_LINK = 'a[href*="/posts/"], a[href*="/permalink/"]';
     /** A real post path, so query-only tracking hrefs are not mistaken for one. */
     const POST_PATH = /\/(posts|permalink)\/\d+/;
-    /** "31 July 2026", "31 tháng 7, 2026" — an absolute date, not "15h". */
-    const ABSOLUTE_DATE = /\d{1,2}\s+(tháng\s*\d{1,2}|[a-zA-Z]+),?\s+\d{4}/;
-    /** "15h", "3 ngày", "2w" — the whole label, as shown on the post header. */
-    const RELATIVE_LABEL = /^\d{1,3}\s*(m|h|d|w|phút|giờ|ngày|tuần)$/i;
+    /** "31 July 2026", "31 Tháng 7, 2026" — an absolute date, not "15h". */
+    const ABSOLUTE_DATE = /\d{1,2}\s+(tháng\s*\d{1,2}|[a-zA-Z]+),?\s+\d{4}/i;
+    /**
+     * "15h", "3 ngày", "2w", "34 minutes ago" — the whole label, as shown on
+     * the post header. The sprite form spells the unit out and adds "ago".
+     */
+    const RELATIVE_LABEL =
+        /^\d{1,3}\s*(m|h|d|w|mins?|minutes?|hrs?|hours?|days?|weeks?|phút|giờ|ngày|tuần)(\s+(ago|trước))?$/i;
     /** Joiners injected mid-word to break naive text matching. */
     const ZERO_WIDTH = /[​-‏⁠﻿]/g;
 
@@ -429,6 +683,32 @@ function extractPosts() {
             .map((part) => part.text)
             .join("")
             .trim();
+    };
+
+    /**
+     * The timestamp as the reader sees it, whichever trick this card used.
+     *
+     * Most cards paint the characters as text nodes, shuffled, which
+     * `paintedText` puts back in order. Some hand the whole label to an SVG
+     * sprite instead — the link holds only `<use xlink:href="#SvgT1">` and the
+     * words live in a `<text id="SvgT1">34 minutes ago</text>` elsewhere in the
+     * document. That second form is why a run could come back with one date in
+     * twenty: there is no text on the link to read at all.
+     *
+     * @param {Element} anchor
+     * @returns {string}
+     */
+    const stampText = (anchor) => {
+        const painted = paintedText(anchor);
+        if (painted !== "") return painted;
+
+        for (const use of anchor.querySelectorAll("use")) {
+            const id = (use.getAttribute("xlink:href") ?? use.getAttribute("href") ?? "").slice(1);
+            const text = id ? (document.getElementById(id)?.textContent ?? "").trim() : "";
+            if (text !== "") return text;
+        }
+
+        return "";
     };
 
     /** Is this node inside a comment rather than the post body? */
@@ -499,13 +779,13 @@ function extractPosts() {
         // the date. Its href starts life as a bare "?__cft__[0]=…" tracking
         // query; Facebook rewrites it to the real permalink on a genuine hover,
         // which `primeTimestamps` performs before this runs.
-        const header = [...card.querySelectorAll("a")]
+        const headers = [...card.querySelectorAll("a")]
             .filter((anchor) => !inComment(anchor))
             .filter((anchor) => {
                 const href = anchor.getAttribute("href") ?? "";
                 return href.startsWith("?") || POST_PATH.test(href);
             })
-            .find((anchor) => {
+            .filter((anchor) => {
                 const rect = anchor.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0;
             });
@@ -513,12 +793,17 @@ function extractPosts() {
         let permalink = null;
         let timeLabel = null;
 
-        if (header) {
-            const href = header.getAttribute("href") ?? "";
-            if (POST_PATH.test(href)) permalink = href.split("?")[0];
+        for (const anchor of headers) {
+            const href = anchor.getAttribute("href") ?? "";
+            if (permalink === null && POST_PATH.test(href)) permalink = href.split("?")[0];
 
-            const painted = paintedText(header);
-            if (RELATIVE_LABEL.test(painted) || ABSOLUTE_DATE.test(painted)) timeLabel = painted;
+            if (timeLabel !== null) continue;
+
+            // Not aria-label: the only anchors carrying an exact date in their
+            // label are comment timestamps, and a comment's time is not the
+            // post's — using it dated posts hours or days too late.
+            const stamp = stampText(anchor);
+            if (RELATIVE_LABEL.test(stamp) || ABSOLUTE_DATE.test(stamp)) timeLabel = stamp;
         }
 
         if (permalink === null) {

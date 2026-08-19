@@ -63,6 +63,22 @@ describe("parsePostedAt", () => {
         assert.equal(parsePostedAt("30 phút", now).getTime(), now.getTime() - 30 * 60_000);
     });
 
+    it("reads the spelled-out label the SVG sprite carries", () => {
+        // Facebook draws some headers as an SVG sprite whose <text> reads
+        // "34 minutes ago" instead of "34m". Same instant, other wording.
+        const now = new Date(2026, 7, 1, 12, 0);
+        assert.equal(parsePostedAt("34 minutes ago", now).getTime(), now.getTime() - 34 * 60_000);
+        assert.equal(parsePostedAt("3 hours ago", now).getTime(), now.getTime() - 3 * 3_600_000);
+        assert.equal(parsePostedAt("2 days ago", now).getTime(), now.getTime() - 2 * 86_400_000);
+        assert.equal(parsePostedAt("1 week ago", now).getTime(), now.getTime() - 604_800_000);
+    });
+
+    it("reads the Vietnamese spelled-out label", () => {
+        const now = new Date(2026, 7, 1, 12, 0);
+        assert.equal(parsePostedAt("18 giờ trước", now).getTime(), now.getTime() - 18 * 3_600_000);
+        assert.equal(parsePostedAt("2 ngày trước", now).getTime(), now.getTime() - 2 * 86_400_000);
+    });
+
     it("treats 'just now' as the reference instant", () => {
         const now = new Date(2026, 7, 1, 12, 0);
         assert.equal(parsePostedAt("Just now", now).getTime(), now.getTime());
