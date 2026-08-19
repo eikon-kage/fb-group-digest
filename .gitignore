@@ -12,3 +12,6 @@ out/
 
 .DS_Store
 *.log
+
+# Personal CVs — kept on disk, never pushed.
+CV/
