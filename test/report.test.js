@@ -280,6 +280,47 @@ describe("renderReport", () => {
         assert.ok(html.indexOf("bài gấp") < html.indexOf("bài thường"));
     });
 
+    it("dates an undated post by the run that collected it, so it leads", () => {
+        const html = renderReport({
+            ...input,
+            posts: [
+                { groupName: "A", text: "bài có giờ", postedAt: "2026-08-25T02:00:00.000Z" },
+                {
+                    groupName: "A",
+                    text: "bài thu hôm nay",
+                    collectedAt: "2026-08-25T13:00:00.000Z",
+                },
+            ],
+        });
+        assert.ok(html.indexOf("bài thu hôm nay") < html.indexOf("bài có giờ"));
+        // Shown as a stand-in, not as a claim about when it was written.
+        assert.ok(html.includes(`<span class="when approx"`));
+        assert.ok(html.includes("Facebook không cho biết giờ đăng"));
+    });
+
+    it("keeps an older run's undated posts below today's", () => {
+        const html = renderReport({
+            ...input,
+            posts: [
+                { groupName: "A", text: "thu tuần trước", collectedAt: "2026-08-18T13:00:00.000Z" },
+                { groupName: "A", text: "đăng hôm nay", postedAt: "2026-08-25T02:00:00.000Z" },
+            ],
+        });
+        assert.ok(html.indexOf("đăng hôm nay") < html.indexOf("thu tuần trước"));
+    });
+
+    it("says so, and sinks, when a post carries no timestamp at all", () => {
+        const html = renderReport({
+            ...input,
+            posts: [
+                { groupName: "A", text: "không mốc nào" },
+                { groupName: "A", text: "có giờ", postedAt: "2026-07-01T00:00:00.000Z" },
+            ],
+        });
+        assert.ok(html.includes("không rõ giờ đăng"));
+        assert.ok(html.indexOf("có giờ") < html.indexOf("không mốc nào"));
+    });
+
     it("folds a post that is many short lines but few characters", () => {
         const short = Array.from({ length: 12 }, (_, i) => `dòng ${i}`).join("\n");
         assert.ok(short.length < 420);
@@ -299,6 +340,15 @@ describe("renderReport", () => {
         assert.ok(html.includes(`data-target="nhom-nhom-a"`));
         // The search box matches on folded text, so "nhom a" finds "Nhóm A".
         assert.ok(html.includes(`data-fold="nhom a"`));
+    });
+
+    it("opens on the first group only — one group is on screen at a time", () => {
+        const html = renderReport(twoGroups);
+        assert.equal((html.match(/class="chip"[^>]*aria-pressed="true"/g) ?? []).length, 1);
+        assert.ok(html.indexOf(`data-name="Nhóm A" data-fold="nhom a" aria-pressed="true"`) > -1);
+        // Stepping through the groups replaces the old show-all / hide-all pair.
+        assert.ok(html.includes(`data-act="next"`));
+        assert.ok(!html.includes(`data-act="all"`));
     });
 
     it("drops the chip row but keeps the filters for a single group", () => {

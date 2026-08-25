@@ -182,6 +182,8 @@ h2 .top { margin-left: auto; font-size: 12px; font-weight: 400; text-decoration:
 .when { flex: none; font-size: 12.5px; font-weight: 600; white-space: nowrap; color: #14417a; }
 .when.old { color: #6b7079; font-weight: 400; }
 .when.unknown { color: #999; font-style: italic; font-weight: 400; }
+/* A time we inferred rather than read: same shape as the real thing, dimmer. */
+.when.approx { color: #6b7079; font-weight: 400; }
 
 .tag {
     font-size: 11.5px; font-weight: 600; white-space: nowrap;
@@ -256,7 +258,8 @@ h2 .top { margin-left: auto; font-size: 12px; font-weight: 400; text-decoration:
 .btn[aria-pressed="true"] { background: #14417a; border-color: #14417a; color: #fff; }
 .status { margin-left: auto; font-size: 12.5px; color: #6b7079; white-space: nowrap; }
 
-/* The chip row is the group picker. It scrolls instead of growing, so a
+/* The chip row is the group picker, and exactly one chip is active: the
+   report shows a single group at a time. It scrolls instead of growing, so a
    config with thirty groups still leaves the first post above the fold. */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 148px; overflow-y: auto; }
 .chip {
@@ -269,7 +272,7 @@ h2 .top { margin-left: auto; font-size: 12px; font-weight: 400; text-decoration:
 .chip[aria-pressed="true"] { background: #eaf0fa; border-color: #14417a; color: #14417a; }
 .chip[aria-pressed="true"] b { color: #14417a; }
 .chip[aria-pressed="true"]::before { content: "✓"; font-size: 11px; }
-.chip[aria-pressed="false"] { opacity: 0.55; }
+.chip:hover { border-color: #aeb4bd; }
 
 /* --- Read state ------------------------------------------------------ */
 .read, h2 .mark-group { display: none; }
@@ -317,6 +320,7 @@ h2 .top + .mark-group, h2 .mark-group + .top { margin-left: 0; }
     .when { color: #8ab4ff; }
     .when.old { color: #9aa0a8; }
     .when.unknown { color: #8a8a8a; }
+    .when.approx { color: #9aa0a8; }
     .rest > summary { color: #8ab4ff; }
     .toolbar, .btn, .chip, .search { background: #1b1d21; border-color: #2e3136; color: #d8dade; }
     .bar + .bar { border-color: #2e3136; }
@@ -384,8 +388,9 @@ const SCRIPT = `
     var hideRead = view.hideRead !== false;
     var onlyUrgent = view.onlyUrgent === true;
     var onlyNew = view.onlyNew === true;
-    var off = Object.create(null);
-    (view.off || []).forEach(function (name) { off[name] = true; });
+    // One group is on screen at a time, so the view remembers which one it is
+    // rather than a set of the ones switched off.
+    var current = typeof view.group === "string" ? view.group : null;
 
     var toolbar = document.querySelector(".toolbar");
     if (!toolbar) return;
@@ -403,6 +408,11 @@ const SCRIPT = `
     var chipOf = {};
     chips.forEach(function (chip) { chipOf[chip.getAttribute("data-target")] = chip; });
 
+    var names = sections.map(function (section) { return section.getAttribute("data-name"); });
+    // A remembered group missing from today's report (renamed, or simply no
+    // posts this run) falls back to the first one instead of a blank page.
+    if (names.indexOf(current) === -1) current = names[0];
+
     function fold(text) {
         return text
             .toLowerCase()
@@ -414,12 +424,11 @@ const SCRIPT = `
     function keyOf(node) { return node.getAttribute("data-key"); }
 
     function saveView() {
-        var list = Object.keys(off).filter(function (name) { return off[name]; });
         save(KEY_VIEW, {
             hideRead: hideRead,
             onlyUrgent: onlyUrgent,
             onlyNew: onlyNew,
-            off: list,
+            group: current,
         });
     }
 
@@ -437,7 +446,7 @@ const SCRIPT = `
         var total = 0;
 
         sections.forEach(function (section) {
-            var on = !off[section.getAttribute("data-name")];
+            var on = section.getAttribute("data-name") === current;
             var posts = [].slice.call(section.querySelectorAll(".post"));
             var visible = 0;
             var unread = 0;
@@ -461,25 +470,33 @@ const SCRIPT = `
                     button.setAttribute("aria-pressed", isRead ? "true" : "false");
                 }
 
-                total++;
-                if (isRead) done++; else unread++;
+                if (!isRead) unread++;
+                if (on) {
+                    total++;
+                    if (isRead) done++;
+                }
                 if (show) visible++;
             });
 
-            section.hidden = visible === 0;
+            section.hidden = !on || visible === 0;
             shown += visible;
 
             var chip = chipOf[section.id];
             if (chip) {
                 chip.setAttribute("aria-pressed", on ? "true" : "false");
                 chip.querySelector("b").textContent = unread;
-                chip.hidden = query !== "" && chip.getAttribute("data-fold").indexOf(query) === -1;
+                // The active chip stays put through a search, so the reader
+                // never loses sight of which group they are in.
+                chip.hidden =
+                    !on && query !== "" && chip.getAttribute("data-fold").indexOf(query) === -1;
             }
         });
 
         if (status) {
+            var place =
+                names.length > 1 ? "Nhóm " + (names.indexOf(current) + 1) + "/" + names.length + " · " : "";
             status.textContent =
-                "Hiện " + shown + "/" + total + " bài" + (done > 0 ? " · " + done + " đã đọc" : "");
+                place + "Hiện " + shown + "/" + total + " bài" + (done > 0 ? " · " + done + " đã đọc" : "");
         }
         if (nothing) nothing.hidden = shown !== 0;
         if (buttons["hide-read"]) {
@@ -494,30 +511,23 @@ const SCRIPT = `
         if (buttons["clear-read"]) buttons["clear-read"].hidden = done === 0;
     }
 
-    /** The chips the search box is currently showing — what "Tất cả" acts on. */
-    function listedChips() {
-        return chips.filter(function (chip) { return !chip.hidden; });
-    }
-
     document.addEventListener("click", function (event) {
         var el = event.target.closest ? event.target.closest("[data-act]") : null;
         if (!el) return;
         var act = el.getAttribute("data-act");
+        // Switching group replaces the whole page below the toolbar, so the
+        // reader is sent back to the first card of the new group.
+        var rewind = false;
 
         if (act === "group") {
-            var name = el.getAttribute("data-name");
-            if (event.altKey || event.metaKey || event.ctrlKey) {
-                // Alt+click: jump to one group without unticking the rest by hand.
-                chips.forEach(function (chip) { off[chip.getAttribute("data-name")] = true; });
-                off[name] = false;
-            } else {
-                off[name] = !off[name];
-            }
+            current = el.getAttribute("data-name");
+            rewind = true;
             saveView();
-        } else if (act === "all" || act === "none") {
-            listedChips().forEach(function (chip) {
-                off[chip.getAttribute("data-name")] = act === "none";
-            });
+        } else if (act === "prev" || act === "next") {
+            // Wrapping: stepping past the last group lands on the first.
+            var at = names.indexOf(current);
+            current = names[(at + (act === "next" ? 1 : names.length - 1)) % names.length];
+            rewind = true;
             saveView();
         } else if (act === "hide-read") {
             hideRead = !hideRead;
@@ -545,6 +555,14 @@ const SCRIPT = `
         }
 
         apply();
+        if (rewind) {
+            // With twenty-five groups the chip row scrolls, so the chip that
+            // just became active is pulled back into view before the page is
+            // rewound to the first card.
+            var active = chips.filter(function (chip) { return chip.getAttribute("data-name") === current; })[0];
+            if (active && active.scrollIntoView) active.scrollIntoView({ block: "nearest" });
+            window.scrollTo(0, 0);
+        }
     });
 
     if (search) {
@@ -575,7 +593,7 @@ function postKey(post) {
 }
 
 /**
- * The filter bar: which groups to show, and what to do with posts already
+ * The filter bar: which group is on screen, and what to do with posts already
  * ticked off. Rendered hidden and revealed by the script, so a mail client
  * that drops scripts never shows dead controls.
  *
@@ -587,12 +605,15 @@ function postKey(post) {
 function renderToolbar(groups, hasPrevious = false) {
     // One group needs no picker, but the read/urgent filters still earn their
     // place, so only the chip row is conditional.
+    //
+    // Exactly one chip is pressed: the script shows a single group at a time,
+    // and the first one is what it opens on.
     const chips =
         groups.length > 1
             ? `<div class="bar chips">${groups
                   .map(
-                      (group) =>
-                          `<button type="button" class="chip" data-act="group" data-target="${group.anchor}" data-name="${escapeHtml(group.name)}" data-fold="${escapeHtml(fold(group.name))}" aria-pressed="true" title="${escapeHtml(group.name)} — bấm để bật/tắt, Alt+bấm để chỉ xem nhóm này"><span>${escapeHtml(group.name)}</span> <b>${group.posts.length}</b></button>`,
+                      (group, index) =>
+                          `<button type="button" class="chip" data-act="group" data-target="${group.anchor}" data-name="${escapeHtml(group.name)}" data-fold="${escapeHtml(fold(group.name))}" aria-pressed="${index === 0 ? "true" : "false"}" title="${escapeHtml(group.name)} — bấm để xem nhóm này"><span>${escapeHtml(group.name)}</span> <b>${group.posts.length}</b></button>`,
                   )
                   .join("")}</div>`
             : "";
@@ -600,8 +621,8 @@ function renderToolbar(groups, hasPrevious = false) {
     const search =
         groups.length > 1
             ? `<input class="search" type="search" placeholder="Tìm nhóm…" aria-label="Tìm nhóm">
-        <button type="button" class="btn" data-act="all" title="Chọn các nhóm đang hiện">Tất cả</button>
-        <button type="button" class="btn" data-act="none" title="Bỏ chọn các nhóm đang hiện">Bỏ hết</button>`
+        <button type="button" class="btn" data-act="prev" title="Xem nhóm trước">‹ Nhóm trước</button>
+        <button type="button" class="btn" data-act="next" title="Xem nhóm sau">Nhóm sau ›</button>`
             : "";
 
     const onlyNew = hasPrevious
@@ -621,15 +642,25 @@ function renderToolbar(groups, hasPrevious = false) {
 }
 
 /**
- * Milliseconds since the epoch for a post, or null when Facebook withheld the
- * date. Used only for ordering.
+ * Milliseconds since the epoch for a post. Used for ordering and for the time
+ * badge.
+ *
+ * Facebook hides the date on most posts we can read (348 of 405 in a recent
+ * run), and burying all of them under the handful it did label made the newest
+ * scrape unreadable. So an undated post is dated by the run that collected it:
+ * everything picked up today sorts as today, and leftovers from an older run
+ * stay back on the day they were seen rather than all claiming to be new.
  *
  * @param {object} post
- * @returns {number | null}
+ * @returns {{ at: number, exact: boolean } | null} null only when the post
+ *   carries no timestamp at all.
  */
 function postedTime(post) {
-    const at = Date.parse(post.postedAt ?? "");
-    return Number.isNaN(at) ? null : at;
+    const posted = Date.parse(post.postedAt ?? "");
+    if (!Number.isNaN(posted)) return { at: posted, exact: true };
+
+    const collected = Date.parse(post.collectedAt ?? "");
+    return Number.isNaN(collected) ? null : { at: collected, exact: false };
 }
 
 /** @param {object} post */
@@ -638,9 +669,11 @@ function isUrgent(post) {
 }
 
 /**
- * Urgent posts first, then newest first. Posts with no readable date keep their
- * collection order and sink to the bottom of their band rather than being
- * scattered through the list.
+ * Urgent posts first, then newest first, with an undated post standing on the
+ * time it was collected (see `postedTime`) — which puts this run's undated
+ * posts at the top, where the freshest thing on the page belongs. Only a post
+ * with no timestamp at all keeps its collection order and sinks to the bottom
+ * of its band.
  *
  * The urgency band is the only reordering: a group section is meant to be read
  * top to bottom and stopped at any point, so whatever Claude marked as "cao"
@@ -657,7 +690,7 @@ function byUrgencyThenNewest(posts) {
         .map((post, index) => ({
             post,
             index,
-            at: postedTime(post),
+            at: postedTime(post)?.at ?? null,
             hot: isUrgent(post) && !post.previous,
         }))
         .sort((a, b) => {
@@ -703,7 +736,7 @@ function anchorFor(name, index, taken) {
 export function renderReport({ posts, previous = [], digest, stats }, now = new Date()) {
     const all = [...posts, ...previous];
     const byGroup = groupBy(all, (post) => post.groupName);
-    const generated = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const generated = `${vnDate(now)} ${vnTime(now)}`;
 
     const taken = new Set();
     const groups = [...byGroup.entries()].map(([name, groupPosts], index) => ({
@@ -941,18 +974,53 @@ function renderAuthor(post) {
     return `<div class="author">${avatar}${who}</div>`;
 }
 
-/** Vietnamese local time, or an honest note when Facebook withheld the date. */
-function formatWhen(iso) {
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return null;
-    return date.toLocaleString("vi-VN", {
-        timeZone: "Asia/Ho_Chi_Minh",
+const VN = { timeZone: "Asia/Ho_Chi_Minh" };
+
+/**
+ * "25/08/2026", Vietnamese order.
+ *
+ * @param {Date} date
+ * @returns {string}
+ */
+function vnDate(date) {
+    return date.toLocaleDateString("vi-VN", {
+        ...VN,
         day: "2-digit",
         month: "2-digit",
         year: "numeric",
+    });
+}
+
+/**
+ * "18:35", 24-hour.
+ *
+ * @param {Date} date
+ * @returns {string}
+ */
+function vnTime(date) {
+    return date.toLocaleTimeString("vi-VN", {
+        ...VN,
         hour: "2-digit",
         minute: "2-digit",
+        hour12: false,
     });
+}
+
+/**
+ * Vietnamese local time as "25/08/2026 18:35", or null when Facebook withheld
+ * the date.
+ *
+ * Date first, then the clock: `toLocaleString("vi-VN")` puts the time in front
+ * ("18:35 25/08/2026"), which reads backwards to a Vietnamese reader, so the
+ * two halves are formatted apart and joined in the expected order.
+ *
+ * @param {string} iso
+ * @returns {string | null}
+ */
+function formatWhen(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return null;
+    return `${vnDate(date)} ${vnTime(date)}`;
 }
 
 const MINUTE = 60_000;
@@ -980,15 +1048,7 @@ export function formatRelative(date, now) {
     if (elapsed < 2 * DAY) return { text: "hôm qua", old: false };
     if (elapsed < 7 * DAY) return { text: `${Math.floor(elapsed / DAY)} ngày trước`, old: true };
 
-    return {
-        text: date.toLocaleDateString("vi-VN", {
-            timeZone: "Asia/Ho_Chi_Minh",
-            day: "2-digit",
-            month: "2-digit",
-            year: "numeric",
-        }),
-        old: true,
-    };
+    return { text: vnDate(date), old: true };
 }
 
 /**
@@ -997,8 +1057,12 @@ export function formatRelative(date, now) {
  * `postedAt` is derived from Facebook's relative label ("17h"), so it is
  * approximate — the badge reads relative to keep that honest, and the exact
  * timestamp plus the collection time sit in the tooltip for anyone who needs
- * them. Posts whose label could not be read say so instead of showing an
- * invented date.
+ * them.
+ *
+ * A post whose label could not be read shows the time it was collected instead,
+ * prefixed with "≈" and greyed: it is where the post sits in the order, not a
+ * claim about when it was written, and the tooltip says as much. Only a post
+ * with no timestamp at all still reads "không rõ giờ đăng".
  *
  * @param {object} post
  * @param {Date} now
@@ -1008,13 +1072,21 @@ function renderWhen(post, now) {
     const collected = post.collectedAt ? formatWhen(post.collectedAt) : null;
     const collectedNote = collected ? `Thu lúc ${collected}` : "";
 
-    const at = post.postedAt ? new Date(post.postedAt) : null;
-    if (at === null || Number.isNaN(at.getTime())) {
+    const when = postedTime(post);
+    if (when === null) {
         const title = collectedNote || "Không có mốc thời gian nào";
         return `<span class="when unknown" title="${escapeHtml(title)}">không rõ giờ đăng</span>`;
     }
 
+    const at = new Date(when.at);
     const { text, old } = formatRelative(at, now);
+    if (!when.exact) {
+        const title = ["Facebook không cho biết giờ đăng — xếp theo lúc thu", collectedNote]
+            .filter(Boolean)
+            .join(" · ");
+        return `<span class="when approx" title="${escapeHtml(title)}">≈ ${escapeHtml(text)}</span>`;
+    }
+
     const title = [
         `Đăng khoảng ${formatWhen(at.toISOString())}`,
         post.timeLabel ? `Facebook ghi "${post.timeLabel}"` : "",
