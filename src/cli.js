@@ -3,6 +3,7 @@
  * fb-group-digest — pipeline entry point.
  *
  *   login    save a Facebook session by signing in manually, once
+ *   groups   list the group ids the signed-in account has joined
  *   collect  read the configured groups and dump raw posts
  *   analyze  filter by keyword, drop duplicates, classify with Claude
  *   report   render the HTML + CSV report
@@ -30,6 +31,7 @@ import { readJson, writeJson, writeText } from "./store/io.js";
 import { commitSeen, loadSeen, partitionBySeen, seenKeys } from "./store/seen.js";
 
 const PATHS = {
+    groups: "data/groups.json",
     posts: "data/posts.json",
     postsCsv: "data/posts.csv",
     analysis: "data/analysis.json",
@@ -74,13 +76,121 @@ function today() {
     return new Date().toISOString().slice(0, 10);
 }
 
-/** @param {Record<string, string>} flags */
+/**
+ * A raw report is written next to the real one under its own name: it is a
+ * different thing — no classification, no seen bookkeeping — and overwriting
+ * the day's actual report with it would lose work that cost Claude calls.
+ *
+ * @param {Record<string, string>} flags
+ */
 function reportPaths(flags) {
     const stamp = flags.date ?? today();
+    const base = flags.raw === "true" ? "preview" : "report";
     return {
-        html: flags.html ?? `out/report-${stamp}.html`,
-        csv: flags.csv ?? `out/report-${stamp}.csv`,
+        html: flags.html ?? `out/${base}-${stamp}.html`,
+        csv: flags.csv ?? `out/${base}-${stamp}.csv`,
     };
+}
+
+/**
+ * An analysis-shaped object built straight from data/posts.json.
+ *
+ * The classification fields are simply absent, which the renderer already
+ * handles — a post whose Claude call failed reaches it the same way. This is
+ * the "show me what collect brought back" view, and it costs nothing.
+ *
+ * @returns {Promise<object>}
+ */
+async function rawAnalysis() {
+    const posts = await readJson(PATHS.posts, null);
+    if (posts === null) {
+        throw new Error(`Chưa có ${PATHS.posts}. Chạy "npm run collect" trước.`);
+    }
+
+    return {
+        generatedAt: new Date().toISOString(),
+        stats: {
+            collected: posts.length,
+            matched: posts.length,
+            fresh: posts.length,
+            duplicates: 0,
+            groups: new Set(posts.map((post) => post.groupName)).size,
+        },
+        digest:
+            "_Bản xem nhanh dữ liệu thô — chưa chạy `analyze`, nên không có " +
+            "phân loại, mức độ gấp và tóm tắt._",
+        posts,
+    };
+}
+
+/**
+ * List the groups the signed-in account belongs to, with their ids.
+ *
+ * This is the step before `collect`: the config needs a group url per group,
+ * and the ids are only readable from inside a signed-in session. The result is
+ * written to data/groups.json, and `--write` appends the new ones straight into
+ * the config's "groups" array without touching what is already there.
+ */
+async function cmdGroups(flags) {
+    const [{ closeSession, openSession }, { listJoinedGroups }] = await Promise.all([
+        import("./collect/browser.js"),
+        import("./collect/groups.js"),
+    ]);
+
+    const session = await openSession();
+    let groups;
+    try {
+        groups = await listJoinedGroups(session.page, {
+            resolveIds: flags["no-resolve"] !== "true",
+        });
+    } finally {
+        await closeSession(session);
+    }
+
+    if (groups.length === 0) {
+        throw new Error(
+            "Không thấy nhóm nào. Kiểm tra bằng cách mở facebook.com/groups/joins/ " +
+                'trong trình duyệt, hoặc chạy "npm run login" nếu session đã hết hạn.',
+        );
+    }
+
+    const out = flags.out ?? PATHS.groups;
+    await writeJson(out, groups);
+
+    for (const group of groups) {
+        log.info(
+            `${group.id.padEnd(20)} ${group.name === "" ? "(không đọc được tên)" : group.name}`,
+        );
+    }
+    log.info(`${groups.length} nhóm → ${out}`);
+
+    if (flags.write === "true") await writeGroupsIntoConfig(flags, groups);
+    else log.info('Thêm "--write" để chép các nhóm này vào config.');
+
+    return groups;
+}
+
+/**
+ * Append the newly found groups to the config file, keeping every other key —
+ * rules, minScore, the comment block — exactly as it was.
+ *
+ * @param {Record<string, string>} flags
+ * @param {Array<object>} groups
+ */
+async function writeGroupsIntoConfig(flags, groups) {
+    const { mergeConfigGroups } = await import("./collect/groups.js");
+    const path = flags.config ?? "config/groups.json";
+    const config = (await readJson(path, null)) ?? { groups: [], rules: [], minScore: 0 };
+    const existing = Array.isArray(config.groups) ? config.groups : [];
+
+    const merged = mergeConfigGroups(existing, groups);
+    if (merged.added.length === 0) {
+        log.info(`${path} đã có đủ ${groups.length} nhóm này — không sửa gì.`);
+        return;
+    }
+
+    await writeJson(path, { ...config, groups: merged.groups });
+    log.info(`Đã thêm ${merged.added.length} nhóm mới vào ${path}.`);
 }
 
 async function cmdCollect(flags) {
@@ -217,7 +327,8 @@ async function cmdAnalyze(flags) {
 }
 
 async function cmdReport(flags) {
-    const analysis = await readJson(PATHS.analysis, null);
+    const raw = flags.raw === "true";
+    const analysis = raw ? await rawAnalysis() : await readJson(PATHS.analysis, null);
     if (analysis === null) {
         throw new Error(`Chưa có ${PATHS.analysis}. Chạy "npm run analyze" trước.`);
     }
@@ -227,7 +338,11 @@ async function cmdReport(flags) {
         throw new Error(`--history phải là số ngày không âm, nhận được "${flags.history}".`);
     }
 
-    const previous = recentHistory(await loadHistory(PATHS.history), analysis.posts, { days });
+    // A raw report already shows every post on disk, so there is nothing for
+    // the history archive to add — and nothing in it has been reported yet.
+    const previous = raw
+        ? []
+        : recentHistory(await loadHistory(PATHS.history), analysis.posts, { days });
     if (previous.length > 0) {
         log.info(`Kèm ${previous.length} bài đã báo cáo trong ${days} ngày qua.`);
     }
@@ -239,9 +354,12 @@ async function cmdReport(flags) {
     await writeText(out.csv, toCsv(analysis.posts));
 
     // Mark as seen only now — if report generation had failed, these posts
-    // should still show up on the next run.
-    const seen = await loadSeen(PATHS.seen);
-    await commitSeen(PATHS.seen, seen, analysis.posts);
+    // should still show up on the next run. A raw report marks nothing: it is
+    // a preview, and the posts in it have not been reported to anyone.
+    if (!raw) {
+        const seen = await loadSeen(PATHS.seen);
+        await commitSeen(PATHS.seen, seen, analysis.posts);
+    }
 
     log.info(`Báo cáo: ${out.html}`);
     log.info(`CSV:     ${out.csv}`);
@@ -274,6 +392,7 @@ fb-group-digest — tóm tắt bài đăng nhóm Facebook
 
 Lệnh:
   login              Đăng nhập Facebook bằng tay và lưu session
+  groups             Liệt kê id các nhóm tài khoản đang tham gia
   collect            Đọc các nhóm trong config, lưu bài thô (JSON + CSV)
   mark-read          Đánh dấu các bài đang có là đã đọc, lần sau bỏ qua
   analyze            Lọc từ khoá + khử trùng lặp + phân tích bằng Claude
@@ -286,11 +405,17 @@ Tuỳ chọn:
   --all              Với "collect": bỏ qua bộ nhớ, lấy lại tất cả và ghi đè
                      Với "analyze": phân tích lại cả bài đã báo cáo lần trước
   --from <nguồn>     Với "mark-read": "posts" (mặc định) hoặc "analysis"
+  --write            Với "groups": chép các nhóm mới tìm được vào config
+  --no-resolve       Với "groups": không mở từng nhóm để đổi slug chữ ra id số
+  --out <path>       Với "groups": ghi đè đường dẫn JSON (mặc định
+                     data/groups.json)
   --date <yyyy-mm-dd>  Ngày dùng để đặt tên file báo cáo (mặc định hôm nay)
   --html <path>      Ghi đè đường dẫn file HTML
   --csv <path>       Ghi đè đường dẫn file CSV báo cáo
   --posts-csv <path>   Với "collect": ghi đè đường dẫn CSV bài thô
                        (mặc định data/posts.csv)
+  --raw              Với "report": dựng báo cáo thẳng từ data/posts.json,
+                     bỏ qua analyze — ghi ra out/preview-<ngày>.html
   --history <ngày>   Với "report": kèm lại bài đã báo cáo trong N ngày qua
                      (mặc định 7, dùng 0 để chỉ hiện bài mới)
   --no-mail          Với "run": tạo báo cáo nhưng không gửi mail
@@ -299,6 +424,7 @@ Tuỳ chọn:
 
 const COMMANDS = {
     login: async (flags) => (await import("./collect/login.js")).runLogin(flags),
+    groups: cmdGroups,
     collect: cmdCollect,
     "mark-read": cmdMarkRead,
     analyze: cmdAnalyze,

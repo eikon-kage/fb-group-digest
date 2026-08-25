@@ -88,6 +88,34 @@ trong cửa sổ đó.
 
 ---
 
+## Lấy id các nhóm bạn đang tham gia
+
+Trước khi `collect` chạy được, `config/groups.json` phải có url của từng nhóm.
+Lệnh `groups` đọc trang "Nhóm của bạn" trong chính session đã đăng nhập và in
+ra id + tên + url của mọi nhóm tài khoản đang là thành viên:
+
+```bash
+npm run groups              # in danh sách + ghi data/groups.json
+npm run groups -- --write   # ghi luôn các nhóm mới vào config/groups.json
+```
+
+```
+[13:30:27] 1270622383398741     Tuyển dụng-Headhunt/Outsource IT (Fullstack, ReactJS, ...)
+[13:30:27] tuyendungdev         Tuyển Dụng DEV (Java, .NET, React, Node.js, Vue.js)
+[13:30:27] 26 nhóm → data/groups.json
+```
+
+Nhóm nào có đường dẫn chữ (`/groups/tuyendungdev`) thì tool mở trang nhóm đó để
+đọc id số — thêm `--no-resolve` nếu muốn nhanh và chấp nhận giữ nguyên slug
+(slug cũng dùng làm khoá khử trùng lặp được, `collect` mở theo `url` chứ không
+theo `id`).
+
+`--write` chỉ **thêm** nhóm chưa có vào cuối mảng `groups`; mục bạn đã sửa tên
+bằng tay, phần `rules` và `minScore` được giữ nguyên. Nhóm đã ghi bằng slug chữ
+không bị thêm lại lần nữa khi lần quét sau trả về id số.
+
+---
+
 ## Chạy
 
 ```bash
@@ -98,9 +126,11 @@ npm run run -- --no-mail # tạo báo cáo, không gửi mail
 Hoặc chạy từng bước (mỗi bước ghi kết quả ra đĩa nên chạy lại được độc lập):
 
 ```bash
+npm run groups    # → data/groups.json (chỉ cần khi muốn cập nhật config)
 npm run collect   # → data/posts.json
 npm run analyze   # → data/analysis.json (+ data/history.json)
 npm run report    # → out/report-YYYY-MM-DD.html + .csv
+npm run preview   # → out/preview-YYYY-MM-DD.html: xem data thô, không cần analyze
 npm run send      # gửi báo cáo gần nhất
 ```
 
@@ -120,14 +150,18 @@ Qua `npm run`, tuỳ chọn phải đứng sau `--`:
 
 | Tuỳ chọn              | Áp dụng cho        | Ý nghĩa                                                    |
 | --------------------- | ------------------ | ---------------------------------------------------------- |
-| `--config <path>`     | `collect`, `analyze` | File cấu hình nhóm/từ khoá (mặc định `config/groups.json`) |
+| `--config <path>`     | `collect`, `analyze`, `groups` | File cấu hình nhóm/từ khoá (mặc định `config/groups.json`) |
 | `--all`               | `collect`          | Bỏ qua bộ nhớ, lấy lại tất cả và ghi đè `data/posts.json`   |
 | `--all`               | `analyze`          | Phân tích lại cả bài đã báo cáo lần trước (tốn thêm lời gọi Claude) |
 | `--posts-csv <path>`  | `collect`          | Ghi đè đường dẫn CSV bài thô (mặc định `data/posts.csv`)    |
 | `--from <nguồn>`      | `mark-read`        | `posts` (mặc định) hoặc `analysis`                          |
+| `--write`             | `groups`           | Chép các nhóm mới tìm được vào file config                  |
+| `--no-resolve`        | `groups`           | Không mở từng nhóm để đổi đường dẫn chữ ra id số            |
+| `--out <path>`        | `groups`           | Ghi đè đường dẫn JSON (mặc định `data/groups.json`)         |
 | `--date <yyyy-mm-dd>` | `report`, `send`   | Ngày dùng để đặt tên file báo cáo (mặc định hôm nay)        |
 | `--html <path>`       | `report`, `send`   | Ghi đè đường dẫn file HTML                                  |
 | `--csv <path>`        | `report`, `send`   | Ghi đè đường dẫn file CSV báo cáo                           |
+| `--raw`               | `report`           | Dựng báo cáo thẳng từ `data/posts.json`, bỏ qua `analyze` (ghi ra `out/preview-…`) |
 | `--history <ngày>`    | `report`           | Kèm lại bài đã báo cáo trong N ngày qua (mặc định 7, `0` = tắt) |
 | `--no-mail`           | `run`              | Tạo báo cáo nhưng không gửi mail                            |
 
@@ -198,17 +232,18 @@ Rule không có clause nào sẽ báo lỗi lúc load config, thay vì âm thầ
 
 File `out/report-*.html` mở bằng trình duyệt là đủ, không cần server.
 
-- **Chọn nhóm**: thanh lọc dính ở đầu trang có một chip cho mỗi nhóm. Bấm để
-  bật/tắt nhóm, **Alt/⌘ + bấm** để chỉ xem một nhóm. Nhiều nhóm thì gõ vào ô
-  *Tìm nhóm…* rồi bấm **Tất cả** / **Bỏ hết** — hai nút này chỉ áp cho các chip
-  đang hiện, nên "chọn đúng 5 nhóm tuyển dụng" là gõ *tuyen dung* → **Tất cả**.
-  Số trên chip là số bài **chưa đọc** của nhóm đó.
+- **Chọn nhóm**: báo cáo hiện **một nhóm tại một thời điểm**. Thanh lọc dính ở
+  đầu trang có một chip cho mỗi nhóm; bấm chip để chuyển sang nhóm đó, hoặc
+  **‹ Nhóm trước** / **Nhóm sau ›** để duyệt lần lượt (hết nhóm cuối thì quay
+  về nhóm đầu). Nhiều nhóm thì gõ vào ô *Tìm nhóm…* để lọc danh sách chip.
+  Số trên chip là số bài **chưa đọc** của nhóm đó, và ô trạng thái bên phải cho
+  biết đang ở nhóm thứ mấy.
 - **Đã đọc**: mỗi bài có nút **✓ Đã đọc** ở góc dưới phải, mỗi nhóm có
   **✓ Cả nhóm** ở tiêu đề. Bài đã đánh dấu bị ẩn ngay (tắt **Ẩn đã đọc** để xem
   lại và bỏ đánh dấu, hoặc **Xoá đánh dấu** để xoá sạch).
 - **Chỉ gấp**: chỉ hiện những bài Claude gắn `urgency: cao`.
 
-Trạng thái đã đọc và bộ nhóm đang chọn lưu trong `localStorage` của trình duyệt
+Trạng thái đã đọc và nhóm đang xem lưu trong `localStorage` của trình duyệt
 (giữ 90 ngày), khoá theo id permalink giống `data/seen.json` — nên đóng file mở
 lại vẫn giữ nguyên, và cùng một bài xuất hiện ở báo cáo sau vẫn nhận ra. Đây là
 bộ lọc **khi đọc**, không đụng tới `data/seen.json`; muốn lần `collect` sau bỏ
@@ -306,6 +341,7 @@ src/
   collect/
     browser.js        profile Chromium cố định + phát hiện checkpoint
     login.js          đăng nhập thủ công một lần vào profile đó
+    groups.js         liệt kê nhóm đã tham gia, lấy id số của từng nhóm
     scrape.js         cuộn feed, trích nội dung bài
   filter/
     normalize.js      fold tiếng Việt, so khớp theo ranh giới từ, fingerprint
@@ -319,7 +355,7 @@ src/
     io.js             đọc/ghi JSON
     seen.js           index khử trùng lặp + dọn bản ghi cũ
     history.js        kho bài đã báo cáo, để báo cáo sau kèm lại
-test/                 140 test, chạy offline
+test/                 143 test, chạy offline
 ```
 
 ---
@@ -333,8 +369,13 @@ test/                 140 test, chạy offline
   giờ đăng theo hai cách: xáo trộn từng ký tự rồi ghép lại bằng CSS, hoặc vẽ
   nguyên nhãn bằng SVG sprite (`<use xlink:href="#SvgT1">`, chữ nằm trong một
   `<text>` ở chỗ khác). `scrape.js` đọc cả hai — đo trên một nhóm thật:
-  15/18 bài có giờ. Bài đọc không ra vẫn giữ `postedAt: null` và báo cáo ghi
-  "không rõ giờ đăng" thay vì bịa ra ngày.
+  15/18 bài có giờ. Bài đọc không ra vẫn giữ `postedAt: null` trong dữ liệu —
+  không bịa ra ngày — nhưng **báo cáo xếp nó theo `collectedAt`**, tức lần chạy
+  thu được nó, và ghi `≈ 1 giờ trước` (dấu ≈ + tooltip nói rõ đây là giờ thu,
+  không phải giờ đăng). Nhờ vậy bài của lần thu hôm nay nằm ở đầu nhóm thay vì
+  chìm dưới nhúm bài hiếm hoi đọc được giờ, còn bài sót lại từ lần chạy trước
+  vẫn nằm đúng ngày nó được thấy. Bài không có mốc nào cả mới ghi "không rõ giờ
+  đăng" và rơi xuống cuối.
   Nhãn là tương đối ("3 hours ago", "18h") nên sai số tới một giờ; `collectedAt`
   mới là mốc chính xác. Vì vậy vẫn **không có tuỳ chọn "chỉ lấy N ngày gần
   nhất"** — `collect` ép feed sang thứ tự thời gian

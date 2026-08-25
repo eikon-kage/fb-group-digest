@@ -12,9 +12,11 @@
   },
   "scripts": {
     "login": "node src/cli.js login",
+    "groups": "node src/cli.js groups",
     "collect": "node src/cli.js collect",
     "analyze": "node src/cli.js analyze",
     "report": "node src/cli.js report",
+    "preview": "node src/cli.js report --raw",
     "send": "node src/cli.js send",
     "run": "node src/cli.js run",
     "test": "node --test \"test/**/*.test.js\"",

@@ -8,16 +8,138 @@
     "Muốn lọc từ khoá thì xem config/groups.example.json.",
     "Key bắt đầu bằng _ được loadConfig bỏ qua, để nguyên cũng không sao."
   ],
-
   "groups": [
     {
       "id": "1270622383398741",
       "name": "Tuyển dụng-Headhunt/Outsource IT (Fullstack, ReactJS, Java, NodeJS, PHP...)",
       "url": "https://www.facebook.com/groups/1270622383398741"
+    },
+    {
+      "id": "550498262988467",
+      "name": "Tuyển Dụng DEV (Java, .NET, React, Node.js, Vue.js)",
+      "url": "https://www.facebook.com/groups/tuyendungdev"
+    },
+    {
+      "id": "3373239332736156",
+      "name": "Tuyển dụng Javascript-Typescript Dev / NodeJS - VueJS - ReactJS - Angular",
+      "url": "https://www.facebook.com/groups/3373239332736156"
+    },
+    {
+      "id": "530066609043706",
+      "name": "Tuyển dụng Front-end ReactJS, VueJS, Angular",
+      "url": "https://www.facebook.com/groups/frontend.reactjs.vuejs.angular.itjob"
+    },
+    {
+      "id": "660197066940780",
+      "name": "Việc Làm IT – Java / .NET / React / NodeJS / Python / Mobile",
+      "url": "https://www.facebook.com/groups/660197066940780"
+    },
+    {
+      "id": "684221642883742",
+      "name": "Lập trình Fullstack (PHP, NodeJS, ReactJS, VueJS, Python, Java, C++..",
+      "url": "https://www.facebook.com/groups/684221642883742"
+    },
+    {
+      "id": "976129910262051",
+      "name": "Tuyển dụng Front-end ReactJS, VueJS, Angular, NextJs, NestJs, React Native",
+      "url": "https://www.facebook.com/groups/976129910262051"
+    },
+    {
+      "id": "1293175695909431",
+      "name": "Tuyển Dụng Front-End Developer - Angular, React, Vue, JS,..",
+      "url": "https://www.facebook.com/groups/1293175695909431"
+    },
+    {
+      "id": "1174848451530421",
+      "name": "Tuyển Dụng Front-End (React, Angular, Next, VueJS)",
+      "url": "https://www.facebook.com/groups/1174848451530421"
+    },
+    {
+      "id": "624474154299436",
+      "name": "Việc làm IT, PHP, NodeJS, Python, Vue, React",
+      "url": "https://www.facebook.com/groups/624474154299436"
+    },
+    {
+      "id": "133046174174537",
+      "name": "Tuyển dụng ReactJS, React Native",
+      "url": "https://www.facebook.com/groups/133046174174537"
+    },
+    {
+      "id": "1307056073521112",
+      "name": "React JS PROXY Support",
+      "url": "https://www.facebook.com/groups/1307056073521112"
+    },
+    {
+      "id": "1157475101372338",
+      "name": "Tìm việc FrontEnd (React, Vue, Angular)",
+      "url": "https://www.facebook.com/groups/timviecfe"
+    },
+    {
+      "id": "675407882961807",
+      "name": "Tuyển Dụng Việc Làm React & React Native Developers - Mobile Engineer Group",
+      "url": "https://www.facebook.com/groups/675407882961807"
+    },
+    {
+      "id": "910466716491873",
+      "name": "Tuyển Dụng Frontend Việt Nam",
+      "url": "https://www.facebook.com/groups/910466716491873"
+    },
+    {
+      "id": "1071850039655897",
+      "name": "React.js Developers",
+      "url": "https://www.facebook.com/groups/ReactJsDevelopersGroup"
+    },
+    {
+      "id": "209410067934912",
+      "name": "Cộng đồng React Native, Android,IOS Việt Nam",
+      "url": "https://www.facebook.com/groups/209410067934912"
+    },
+    {
+      "id": "265951645312327",
+      "name": "Cộng đồng ReactJS - Việt Nam",
+      "url": "https://www.facebook.com/groups/reactjs.vietnam"
+    },
+    {
+      "id": "1023497274717681",
+      "name": "React.js | Next.js Developers",
+      "url": "https://www.facebook.com/groups/1023497274717681"
+    },
+    {
+      "id": "1361914687182496",
+      "name": "REACTJS VIET NAM",
+      "url": "https://www.facebook.com/groups/how.to.reactjs"
+    },
+    {
+      "id": "1273325223046040",
+      "name": "Node.js, React, React Native - Fullstack Javascript Vietnam",
+      "url": "https://www.facebook.com/groups/1273325223046040"
+    },
+    {
+      "id": "1932267903460123",
+      "name": "Tuyển dụng Lập trình ( Front -end, iOS, Java, PHP, Python, React Native)",
+      "url": "https://www.facebook.com/groups/1932267903460123"
+    },
+    {
+      "id": "1439059209646175",
+      "name": "Cộng đồng FrontEnd Vuejs, Angular, React - Việt Nam",
+      "url": "https://www.facebook.com/groups/condong.angular.vietnam"
+    },
+    {
+      "id": "872438055357222",
+      "name": "Tuyển dụng React Native , Reactjs, Nodejs",
+      "url": "https://www.facebook.com/groups/872438055357222"
+    },
+    {
+      "id": "651435561711483",
+      "name": "Angular - Nodejs - React Native - FrontEnd - BackEnd Việt Nam ✅",
+      "url": "https://www.facebook.com/groups/developer.com.vn"
+    },
+    {
+      "id": "2035225500060260",
+      "name": "Frontend Developers (Angular, Vue, React)",
+      "url": "https://www.facebook.com/groups/we.frontend.developers"
     }
   ],
-
   "rules": [],
-
   "minScore": 0
 }
