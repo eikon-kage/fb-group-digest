@@ -8,7 +8,8 @@
  *   analyze  filter by keyword, drop duplicates, classify with Claude
  *   report   render the HTML + CSV report
  *   send     email the most recent report
- *   run      collect → analyze → report → send
+ *   open     open the most recent report in the browser
+ *   run      collect → analyze → report → open → send
  *
  * Each stage writes its output to disk, so any stage can be re-run on its own
  * without repeating the one before it.
@@ -22,10 +23,11 @@
 
 import process from "node:process";
 import { loadConfig, loadEnv } from "./config.js";
-import { filterPosts } from "./filter/keywords.js";
+import { excludePosts, filterPosts } from "./filter/keywords.js";
 import { log } from "./logger.js";
 import { toCsv, toPostsCsv } from "./report/csv.js";
 import { renderReport } from "./report/html.js";
+import { latestReport, openInBrowser } from "./report/open.js";
 import { addToHistory, loadHistory, recentHistory, saveHistory } from "./store/history.js";
 import { readJson, writeJson, writeText } from "./store/io.js";
 import { commitSeen, loadSeen, partitionBySeen, seenKeys } from "./store/seen.js";
@@ -77,6 +79,23 @@ function today() {
 }
 
 /**
+ * Apply the config's "exclude" rules and log what each one took out.
+ *
+ * @param {Array<object>} posts
+ * @param {object[]} rules
+ * @param {string} what Label for the log line, e.g. "bài mới".
+ */
+function dropExcluded(posts, rules, what) {
+    const { kept, dropped } = excludePosts(posts, rules);
+    const total = posts.length - kept.length;
+    if (total > 0) {
+        const detail = [...dropped].map(([name, n]) => `${name}: ${n}`).join(", ");
+        log.info(`Loại ${total}/${posts.length} ${what} (${detail}).`);
+    }
+    return kept;
+}
+
+/**
  * A raw report is written next to the real one under its own name: it is a
  * different thing — no classification, no seen bookkeeping — and overwriting
  * the day's actual report with it would lose work that cost Claude calls.
@@ -101,16 +120,17 @@ function reportPaths(flags) {
  *
  * @returns {Promise<object>}
  */
-async function rawAnalysis() {
-    const posts = await readJson(PATHS.posts, null);
-    if (posts === null) {
+async function rawAnalysis(exclude) {
+    const collected = await readJson(PATHS.posts, null);
+    if (collected === null) {
         throw new Error(`Chưa có ${PATHS.posts}. Chạy "npm run collect" trước.`);
     }
+    const posts = dropExcluded(collected, exclude, "bài");
 
     return {
         generatedAt: new Date().toISOString(),
         stats: {
-            collected: posts.length,
+            collected: collected.length,
             matched: posts.length,
             fresh: posts.length,
             duplicates: 0,
@@ -279,7 +299,8 @@ async function cmdAnalyze(flags) {
     }
 
     log.step(`Lọc từ khoá trên ${posts.length} bài…`);
-    const matched = filterPosts(posts, config.rules, { minScore: config.minScore });
+    const wanted = dropExcluded(posts, config.exclude, "bài");
+    const matched = filterPosts(wanted, config.rules, { minScore: config.minScore });
     log.info(`${matched.length} bài khớp bộ lọc.`);
 
     // `--all` ignores the seen index, the same way it does for `collect`. It is
@@ -328,7 +349,8 @@ async function cmdAnalyze(flags) {
 
 async function cmdReport(flags) {
     const raw = flags.raw === "true";
-    const analysis = raw ? await rawAnalysis() : await readJson(PATHS.analysis, null);
+    const config = await loadConfig(flags.config ?? "config/groups.json");
+    const analysis = raw ? await rawAnalysis(config.exclude) : await readJson(PATHS.analysis, null);
     if (analysis === null) {
         throw new Error(`Chưa có ${PATHS.analysis}. Chạy "npm run analyze" trước.`);
     }
@@ -338,11 +360,21 @@ async function cmdReport(flags) {
         throw new Error(`--history phải là số ngày không âm, nhận được "${flags.history}".`);
     }
 
+    // analyze already applied "exclude", but an analysis or archive written
+    // before a rule was added still holds what it now rules out. Filtering
+    // again here lets a new rule show up on the next report without paying
+    // for another round of Claude calls. A raw analysis was filtered just now.
+    const posts = raw ? analysis.posts : dropExcluded(analysis.posts, config.exclude, "bài");
+
     // A raw report already shows every post on disk, so there is nothing for
     // the history archive to add — and nothing in it has been reported yet.
     const previous = raw
         ? []
-        : recentHistory(await loadHistory(PATHS.history), analysis.posts, { days });
+        : dropExcluded(
+              recentHistory(await loadHistory(PATHS.history), analysis.posts, { days }),
+              config.exclude,
+              "bài cũ",
+          );
     if (previous.length > 0) {
         log.info(`Kèm ${previous.length} bài đã báo cáo trong ${days} ngày qua.`);
     }
@@ -350,12 +382,13 @@ async function cmdReport(flags) {
     const out = reportPaths(flags);
     // The CSV stays this run's posts only: it is the machine-readable record of
     // what was new, and repeating last week's rows in every file would ruin it.
-    await writeText(out.html, renderReport({ ...analysis, previous }));
-    await writeText(out.csv, toCsv(analysis.posts));
+    await writeText(out.html, renderReport({ ...analysis, posts, previous }));
+    await writeText(out.csv, toCsv(posts));
 
     // Mark as seen only now — if report generation had failed, these posts
     // should still show up on the next run. A raw report marks nothing: it is
-    // a preview, and the posts in it have not been reported to anyone.
+    // a preview, and the posts in it have not been reported to anyone. The
+    // excluded ones are marked too: they were read, just not wanted.
     if (!raw) {
         const seen = await loadSeen(PATHS.seen);
         await commitSeen(PATHS.seen, seen, analysis.posts);
@@ -372,10 +405,20 @@ async function cmdSend(flags) {
     await sendReport({ htmlPath: out.html, csvPath: out.csv });
 }
 
+async function cmdOpen(flags) {
+    const path = flags.html ?? (await latestReport());
+    if (path === null) {
+        throw new Error('Chưa có báo cáo nào trong out/. Chạy "npm run report" trước.');
+    }
+    log.info(`Mở ${path}`);
+    openInBrowser(path);
+}
+
 async function cmdRun(flags) {
     await cmdCollect(flags);
     await cmdAnalyze(flags);
-    await cmdReport(flags);
+    const out = await cmdReport(flags);
+    if (flags["no-open"] !== "true") openInBrowser(out.html);
 
     if (flags["no-mail"] === "true") {
         log.info("Bỏ qua bước gửi mail (--no-mail).");
@@ -398,7 +441,8 @@ Lệnh:
   analyze            Lọc từ khoá + khử trùng lặp + phân tích bằng Claude
   report             Sinh báo cáo HTML và CSV
   send               Gửi báo cáo gần nhất qua email
-  run                Chạy toàn bộ: collect → analyze → report → send
+  open               Mở báo cáo gần nhất trong trình duyệt
+  run                Chạy toàn bộ: collect → analyze → report → mở → send
 
 Tuỳ chọn:
   --config <path>    File cấu hình nhóm/từ khoá (mặc định config/groups.json)
@@ -419,6 +463,7 @@ Tuỳ chọn:
   --history <ngày>   Với "report": kèm lại bài đã báo cáo trong N ngày qua
                      (mặc định 7, dùng 0 để chỉ hiện bài mới)
   --no-mail          Với "run": tạo báo cáo nhưng không gửi mail
+  --no-open          Với "run": không tự mở báo cáo trong trình duyệt
 `);
 }
 
@@ -430,6 +475,7 @@ const COMMANDS = {
     analyze: cmdAnalyze,
     report: cmdReport,
     send: cmdSend,
+    open: cmdOpen,
     run: cmdRun,
     help: printHelp,
 };

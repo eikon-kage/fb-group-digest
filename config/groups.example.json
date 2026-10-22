@@ -9,9 +9,32 @@
   "rules": [
     {
       "name": "Tuyển dụng backend",
-      "any": ["tuyển", "recruit", "hiring"],
-      "regex": ["\\b(node|golang|java)\\b"],
+      "any": [
+        "tuyển",
+        "recruit",
+        "hiring"
+      ],
+      "regex": [
+        "\\b(node|golang|java)\\b"
+      ],
       "weight": 2
+    }
+  ],
+  "exclude": [
+    {
+      "name": "Yêu cầu 5+ năm",
+      "minYears": 5
+    },
+    {
+      "name": "Ở HCM (không nhắc HN)",
+      "any": [
+        "hcm",
+        "sài gòn"
+      ],
+      "none": [
+        "hn",
+        "hà nội"
+      ]
     }
   ],
   "minScore": 1

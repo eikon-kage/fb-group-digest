@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { compileRules, filterPosts, scoreText } from "../src/filter/keywords.js";
+import { compileRules, excludePosts, filterPosts, scoreText } from "../src/filter/keywords.js";
 
 describe("compileRules", () => {
     it("rejects a rule without a name", () => {
@@ -148,5 +148,76 @@ describe("filterPosts", () => {
 
     it("returns an empty array when nothing matches", () => {
         assert.deepEqual(filterPosts([{ id: "9", text: "xin chào" }], rules), []);
+    });
+});
+
+describe("minYears", () => {
+    const rules = compileRules([{ name: "5+ năm", minYears: 5 }]);
+    const matches = (text) => scoreText(text, rules).score > 0;
+
+    it("reads the usual ways of asking for five years", () => {
+        for (const text of [
+            "Yêu cầu 5+ năm kinh nghiệm ReactJS",
+            "tuyển ReactJS từ 5 yoe",
+            "senior reactnative 5y+ ko cần eng",
+            "Kinh nghiệm: tối thiểu 5 năm",
+            "5+ years of frontend development",
+            "có từ 5–7 năm kinh nghiệm fullstack",
+            "cần gấp .NET từ 6 năm, onboard ngay",
+            "leader (>5+exp) có kinh nghiệm bank",
+            "10+ năm kinh nghiệm",
+        ]) {
+            assert.ok(matches(text), text);
+        }
+    });
+
+    it("counts a range by its lower end", () => {
+        assert.ok(!matches("tìm frontend 3 - 5 năm thực chiến"));
+        assert.ok(!matches("cần reactjs 4-5yoe, đi làm ngay"));
+        assert.ok(!matches("dự án cần RN 4.5-5 năm, non eng"));
+    });
+
+    it("ignores figures below the threshold and years that are not experience", () => {
+        assert.ok(!matches("yêu cầu 3+ năm kinh nghiệm"));
+        assert.ok(!matches("từ 4.5 năm kinh nghiệm"));
+        assert.ok(!matches("sau 6 năm, chúng mình đang bước vào giai đoạn mới"));
+        assert.ok(!matches("không cần 7–8 năm kinh nghiệm, 3 năm là đủ"));
+        assert.ok(!matches("lương upto 55m, hợp đồng dài hạn"));
+    });
+
+    it("rejects a non-positive minYears", () => {
+        assert.throws(() => compileRules([{ name: "bad", minYears: 0 }]), /positive number/);
+    });
+});
+
+describe("excludePosts", () => {
+    const rules = [
+        { name: "Fullstack", any: ["fullstack"] },
+        { name: "HCM", any: ["hcm", "sài gòn"], none: ["hn", "hà nội"] },
+    ];
+    const posts = [
+        { id: "1", text: "Tuyển ReactJS tại Cầu Giấy" },
+        { id: "2", text: "Tuyển Fullstack NodeJS" },
+        { id: "3", text: "[HCM] tuyển frontend" },
+        { id: "4", text: "[HN/HCM] tuyển frontend" },
+    ];
+
+    it("keeps only posts that match no rule", () => {
+        const { kept } = excludePosts(posts, rules);
+        assert.deepEqual(
+            kept.map((post) => post.id),
+            ["1", "4"],
+        );
+    });
+
+    it("counts drops per rule", () => {
+        const { dropped } = excludePosts(posts, rules);
+        assert.deepEqual(
+            [...dropped],
+            [
+                ["Fullstack", 1],
+                ["HCM", 1],
+            ],
+        );
     });
 });

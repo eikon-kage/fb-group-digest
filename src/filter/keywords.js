@@ -9,6 +9,8 @@
  *     any:    ["laptop", "macbook"],  // at least one must appear
  *     none:   ["đã mua"],             // none may appear
  *     regex:  ["\\b(i5|i7)\\b"],      // every pattern must match
+ *     minYears: 5,                    // asks for at least this many years
+ *                                     //   of experience (see experience.js)
  *     weight: 3                       // added to the post's score on a match
  *   }
  *
@@ -21,7 +23,10 @@
  * without diacritics.
  */
 
+import { yearsAsked } from "./experience.js";
 import { containsTerm, fold } from "./normalize.js";
+
+const CLAUSES = ["all", "any", "none", "regex", "minYears"];
 
 /**
  * @typedef {object} Rule
@@ -30,6 +35,7 @@ import { containsTerm, fold } from "./normalize.js";
  * @property {string[]} [any]
  * @property {string[]} [none]
  * @property {string[]} [regex]
+ * @property {number} [minYears]
  * @property {number} [weight]
  */
 
@@ -64,9 +70,19 @@ export function compileRules(rules) {
                 throw new TypeError(`rules[${index}] (${rule.name}): "${clause}" must be string[]`);
             }
         }
+        if (
+            rule.minYears !== undefined &&
+            !(typeof rule.minYears === "number" && rule.minYears > 0)
+        ) {
+            throw new TypeError(
+                `rules[${index}] (${rule.name}): "minYears" must be a positive number`,
+            );
+        }
 
-        const hasClause = ["all", "any", "none", "regex"].some(
-            (clause) => Array.isArray(rule[clause]) && rule[clause].length > 0,
+        const hasClause = CLAUSES.some((clause) =>
+            clause === "minYears"
+                ? rule.minYears !== undefined
+                : Array.isArray(rule[clause]) && rule[clause].length > 0,
         );
         if (!hasClause) {
             throw new TypeError(
@@ -132,6 +148,12 @@ export function scoreText(text, compiledRules) {
         }
         if (!ok) continue;
 
+        if (rule.minYears !== undefined) {
+            const years = yearsAsked(folded).filter((y) => y >= rule.minYears);
+            if (years.length === 0) continue;
+            localHits.push(`${Math.max(...years)}+ năm`);
+        }
+
         result.score += rule.weight;
         result.rules.push(rule.name);
         for (const hit of localHits) hits.add(hit);
@@ -158,4 +180,33 @@ export function filterPosts(posts, rules, options = {}) {
         .map((post) => ({ ...post, ...scoreText(post.text, compiled) }))
         .filter((post) => post.score >= minScore)
         .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Drop every post that matches any exclusion rule.
+ *
+ * Exclusions use the same rule shape as `filterPosts`, but a match removes the
+ * post instead of scoring it — "senior", "5+ năm", a city — whatever the
+ * positive rules would have said about it.
+ *
+ * @param {Array<{ text: string }>} posts
+ * @param {Rule[]} rules
+ * @returns {{ kept: Array<object>, dropped: Map<string, number> }} `dropped`
+ *   counts posts per rule name; a post counts once, under the first rule it hit.
+ */
+export function excludePosts(posts, rules) {
+    const compiled = compileRules(rules);
+    const kept = [];
+    const dropped = new Map();
+
+    for (const post of posts) {
+        const [first] = scoreText(post.text, compiled).rules;
+        if (first === undefined) {
+            kept.push(post);
+        } else {
+            dropped.set(first, (dropped.get(first) ?? 0) + 1);
+        }
+    }
+
+    return { kept, dropped };
 }

@@ -119,8 +119,9 @@ không bị thêm lại lần nữa khi lần quét sau trả về id số.
 ## Chạy
 
 ```bash
-npm run run              # collect → analyze → report → send
+npm run run              # collect → analyze → report → mở HTML → send
 npm run run -- --no-mail # tạo báo cáo, không gửi mail
+npm run open             # mở báo cáo gần nhất trong trình duyệt
 ```
 
 Hoặc chạy từng bước (mỗi bước ghi kết quả ra đĩa nên chạy lại được độc lập):
@@ -164,6 +165,7 @@ Qua `npm run`, tuỳ chọn phải đứng sau `--`:
 | `--raw`               | `report`           | Dựng báo cáo thẳng từ `data/posts.json`, bỏ qua `analyze` (ghi ra `out/preview-…`) |
 | `--history <ngày>`    | `report`           | Kèm lại bài đã báo cáo trong N ngày qua (mặc định 7, `0` = tắt) |
 | `--no-mail`           | `run`              | Tạo báo cáo nhưng không gửi mail                            |
+| `--no-open`           | `run`              | Không tự mở báo cáo HTML trong trình duyệt                  |
 
 `run` truyền nguyên tuỳ chọn xuống cả bốn bước, nên dùng được hết bảng trên.
 
@@ -201,15 +203,38 @@ Chạy hằng ngày lúc 8h sáng:
 }
 ```
 
-| Clause   | Ý nghĩa                                    |
-| -------- | ------------------------------------------ |
-| `all`    | Mọi từ đều phải xuất hiện                  |
-| `any`    | Ít nhất một từ phải xuất hiện              |
-| `none`   | Không từ nào được xuất hiện (loại bài)     |
-| `regex`  | Mọi pattern đều phải khớp                  |
-| `weight` | Cộng vào điểm của bài khi rule khớp        |
+| Clause     | Ý nghĩa                                          |
+| ---------- | ------------------------------------------------ |
+| `all`      | Mọi từ đều phải xuất hiện                        |
+| `any`      | Ít nhất một từ phải xuất hiện                    |
+| `none`     | Không từ nào được xuất hiện (loại bài)           |
+| `regex`    | Mọi pattern đều phải khớp                        |
+| `minYears` | Bài đòi từ N năm kinh nghiệm trở lên             |
+| `weight`   | Cộng vào điểm của bài khi rule khớp              |
 
 Bài nào có tổng điểm `>= minScore` thì vào báo cáo, sắp xếp theo điểm giảm dần.
+
+### Loại bài: `exclude`
+
+`exclude` cùng cú pháp với `rules`, nhưng bài khớp **bất kỳ** luật nào trong đó
+thì bị bỏ, trước cả bước chấm điểm và trước khi gọi Claude:
+
+```json
+"exclude": [
+    { "name": "Yêu cầu 5+ năm", "minYears": 5 },
+    { "name": "Fullstack", "any": ["fullstack", "full-stack", "full stack"] },
+    { "name": "Ở HCM (không nhắc HN)", "any": ["hcm", "sài gòn"], "none": ["hn", "hà nội"] }
+]
+```
+
+`minYears` đọc được các kiểu `5+ năm`, `từ 5 yoe`, `5y+`, `tối thiểu 5 năm`,
+`5+ years of`, `5–7 năm`. Khoảng thì tính theo đầu dưới: `3–5 năm` là 3, nên
+không bị loại. Bài liệt kê nhiều vị trí mà có một vị trí đòi 5 năm thì cả bài bị
+loại.
+
+`report` và `preview` cũng áp `exclude`, kể cả với bài cũ kèm từ lịch sử — thêm
+luật mới rồi chạy lại `npm run report` là thấy ngay, không tốn lời gọi Claude.
+Log in ra mỗi luật loại bao nhiêu bài.
 
 ### Tiếng Việt có dấu / không dấu
 
@@ -345,7 +370,8 @@ src/
     scrape.js         cuộn feed, trích nội dung bài
   filter/
     normalize.js      fold tiếng Việt, so khớp theo ranh giới từ, fingerprint
-    keywords.js       engine rule all/any/none/regex + chấm điểm
+    keywords.js       engine rule all/any/none/regex/minYears + chấm điểm + exclude
+    experience.js     đọc số năm kinh nghiệm bài yêu cầu
   analyze/claude.js   phân loại + viết tóm tắt
   report/
     html.js           báo cáo HTML tự chứa (escape đầy đủ)
@@ -355,7 +381,7 @@ src/
     io.js             đọc/ghi JSON
     seen.js           index khử trùng lặp + dọn bản ghi cũ
     history.js        kho bài đã báo cáo, để báo cáo sau kèm lại
-test/                 143 test, chạy offline
+test/                 153 test, chạy offline
 ```
 
 ---
@@ -387,3 +413,9 @@ test/                 143 test, chạy offline
 - **Bài dài có thể bị cắt.** Script bấm "Xem thêm" trước khi trích, nhưng nút
   bị re-render thì bỏ qua và lấy phần text đang có.
 - **Chỉ đọc bài, không đọc bình luận.**
+
+## Website CV
+
+Mở `cv.html` trực tiếp trong trình duyệt để xem website CV. Thay các phần trong
+`[ngoặc vuông]`, email, liên kết mạng xã hội và khối ảnh bằng thông tin của bạn.
+Nội dung hiện là mẫu vì repo chưa có dữ liệu CV cá nhân.

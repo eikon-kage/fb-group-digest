@@ -18,6 +18,7 @@
     "report": "node src/cli.js report",
     "preview": "node src/cli.js report --raw",
     "send": "node src/cli.js send",
+    "open": "node src/cli.js open",
     "run": "node src/cli.js run",
     "test": "node --test \"test/**/*.test.js\"",
     "lint": "npx --no-install @biomejs/biome check .",

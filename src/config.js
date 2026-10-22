@@ -73,7 +73,7 @@ export function envBool(name, fallback) {
  * Load and validate the groups + rules config.
  *
  * @param {string} path
- * @returns {Promise<{ groups: object[], rules: object[], minScore: number }>}
+ * @returns {Promise<{ groups: object[], rules: object[], exclude: object[], minScore: number }>}
  */
 export async function loadConfig(path) {
     const resolved = resolve(path);
@@ -101,10 +101,14 @@ export async function loadConfig(path) {
     if (!Array.isArray(parsed.rules)) {
         throw new Error(`Config ${resolved}: "rules" phải là mảng`);
     }
+    if (parsed.exclude !== undefined && !Array.isArray(parsed.exclude)) {
+        throw new Error(`Config ${resolved}: "exclude" phải là mảng`);
+    }
 
     return {
         groups: parsed.groups,
         rules: parsed.rules,
+        exclude: parsed.exclude ?? [],
         minScore: typeof parsed.minScore === "number" ? parsed.minScore : 1,
     };
 }

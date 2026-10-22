@@ -6,7 +6,8 @@
     "\"name\" chỉ để hiển thị trong báo cáo — đặt gì cũng được.",
     "rules rỗng + minScore 0 = lấy tất cả bài, không lọc từ khoá.",
     "Muốn lọc từ khoá thì xem config/groups.example.json.",
-    "Key bắt đầu bằng _ được loadConfig bỏ qua, để nguyên cũng không sao."
+    "Key bắt đầu bằng _ được loadConfig bỏ qua, để nguyên cũng không sao.",
+    "\"exclude\": bài khớp BẤT KỲ luật nào ở đây thì bị bỏ, trước cả bước lọc \"rules\". Cùng cú pháp với rules, thêm \"minYears\": số năm kinh nghiệm tối thiểu bài yêu cầu."
   ],
   "groups": [
     {
@@ -141,5 +142,90 @@
     }
   ],
   "rules": [],
+  "exclude": [
+    {
+      "name": "Yêu cầu 4+ năm",
+      "minYears": 4
+    },
+    {
+      "name": "Senior / Lead",
+      "regex": [
+        "(?<!(?:len |thanh |cac |voi |va |cung |boi |for |pre-))\\b(?:senior|snr|sr|tech ?lead|team ?lead|leader|principal|architect)\\b"
+      ],
+      "none": [
+        "middle",
+        "mid-level",
+        "mid level",
+        "fresher",
+        "intern",
+        "thực tập",
+        "lộ trình lên",
+        "cơ hội lên",
+        "trở thành senior"
+      ]
+    },
+    {
+      "name": "Fullstack",
+      "any": ["fullstack", "full-stack", "full stack"]
+    },
+    {
+      "name": "Ở HCM (không nhắc HN)",
+      "any": [
+        "hcm",
+        "hcmc",
+        "tphcm",
+        "hồ chí minh",
+        "ho chi minh city",
+        "sài gòn",
+        "saigon",
+        "tân bình",
+        "phú nhuận",
+        "bình thạnh",
+        "gò vấp",
+        "thủ đức",
+        "thảo điền",
+        "quận 1",
+        "quận 2",
+        "quận 3",
+        "quận 4",
+        "quận 5",
+        "quận 6",
+        "quận 7",
+        "quận 8",
+        "quận 9",
+        "quận 10",
+        "quận 11",
+        "quận 12",
+        "district 1",
+        "district 2",
+        "district 3",
+        "district 4",
+        "district 5",
+        "district 6",
+        "district 7",
+        "district 8",
+        "district 9",
+        "district 10",
+        "district 11",
+        "district 12"
+      ],
+      "none": [
+        "hn",
+        "hà nội",
+        "hanoi",
+        "cầu giấy",
+        "mỹ đình",
+        "đống đa",
+        "hoàn kiếm",
+        "thanh xuân",
+        "hà đông",
+        "hoàng mai",
+        "ba đình",
+        "từ liêm",
+        "long biên",
+        "hai bà trưng"
+      ]
+    }
+  ],
   "minScore": 0
 }
